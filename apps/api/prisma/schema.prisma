@@ -1,0 +1,233 @@
+generator client {
+  provider      = "prisma-client-js"
+  // "rhel-openssl-3.0.x" is the Vercel/AWS Lambda runtime; "native" is your own machine.
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum LeadStatus {
+  NEW
+  QUALIFIED
+  UNQUALIFIED
+  CONTACTED
+  BOOKED
+  LOST
+}
+
+enum ContentStatus {
+  IDEA
+  DRAFT
+  VALIDATED
+  SCHEDULED
+  PUBLISHING
+  PUBLISHED
+  FAILED
+  PAUSED
+}
+
+enum PublishMode {
+  DRY_RUN
+  LIVE
+}
+
+model AdminUser {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  role         String   @default("ADMIN")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model BusinessProfile {
+  id                String   @id @default(cuid())
+  name              String   @default("TutorLink Media")
+  description       String   @default("Home-tuition matching service in configured service areas.")
+  serviceAreas      Json
+  supportedPrograms Json
+  trustedFacts      Json
+  prohibitedClaims  Json
+  brandAssetUrls    Json
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+model PageSnapshot {
+  id             String   @id @default(cuid())
+  pageId         String
+  pageName       String?
+  profilePicture String?
+  fetchedAt      DateTime @default(now())
+  permissionInfo Json
+  rawSummary     Json
+  @@index([pageId, fetchedAt])
+}
+
+model ContentItem {
+  id               String        @id @default(cuid())
+  platformPostId   String?       @unique
+  title            String
+  format           String
+  topic            String
+  creativeAngle    String?
+  visualStyle      String?
+  language         String        @default("bn")
+  caption          String
+  hashtags         Json
+  callToAction     String?
+  assetUrl         String?
+  script           String?
+  reelScenes       Json?
+  status           ContentStatus @default(IDEA)
+  scheduledAt      DateTime?
+  publishedAt      DateTime?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  metrics           ContentMetric[]
+  leads             Lead[]
+  experiments       Experiment[]
+  @@index([status, scheduledAt])
+  @@index([topic, format])
+  @@index([creativeAngle, createdAt])
+  @@index([visualStyle, createdAt])
+}
+
+model ContentMetric {
+  id                 String      @id @default(cuid())
+  contentItemId      String
+  contentItem        ContentItem @relation(fields: [contentItemId], references: [id], onDelete: Cascade)
+  observedAt         DateTime    @default(now())
+  reach              Int?
+  uniqueMediaViews   Int?
+  impressions        Int?
+  views              Int?
+  reactions          Int?
+  comments           Int?
+  shares             Int?
+  clicks             Int?
+  watchTimeSeconds   Int?
+  raw                Json
+  @@index([contentItemId, observedAt])
+}
+
+model Lead {
+  id                  String       @id @default(cuid())
+  externalReference   String?
+  contactName         String?
+  contactChannel      String?
+  contactValue        String?
+  status              LeadStatus   @default(NEW)
+  qualificationReason String?
+  qualificationScore  Float?
+  serviceArea         String?
+  classLevel          String?
+  subjects            Json?
+  schedulePreference  String?
+  budget              String?
+  sourceContentId     String?
+  sourceContent       ContentItem? @relation(fields: [sourceContentId], references: [id], onDelete: SetNull)
+  attributionConfidence Float?
+  bookedAt            DateTime?
+  notes               String?
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+  @@index([status, createdAt])
+  @@index([sourceContentId])
+}
+
+model CampaignExperiment {
+  id          String   @id @default(cuid())
+  name        String
+  hypothesis  String
+  variable    String
+  status      String   @default("PLANNED")
+  startAt     DateTime?
+  endAt       DateTime?
+  sampleSize  Int      @default(0)
+  result      Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Experiment {
+  id          String      @id @default(cuid())
+  contentItemId String
+  contentItem  ContentItem @relation(fields: [contentItemId], references: [id], onDelete: Cascade)
+  experimentKey String
+  variant      String
+  createdAt    DateTime    @default(now())
+  @@index([experimentKey, variant])
+}
+
+model AgentDecision {
+  id          String   @id @default(cuid())
+  runId       String
+  category    String
+  observation Json
+  hypothesis  String
+  confidence  Float
+  action      Json
+  outcome     Json?
+  createdAt   DateTime @default(now())
+  @@index([runId, createdAt])
+}
+
+model SystemSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+
+model AuditEvent {
+  id         String   @id @default(cuid())
+  actor      String
+  action     String
+  entityType String?
+  entityId   String?
+  details    Json
+  createdAt  DateTime @default(now())
+  @@index([action, createdAt])
+}
+
+model JobRun {
+  id                String   @id @default(cuid())
+  jobKey            String
+  idempotencyKey    String   @unique
+  status            String   @default("PENDING")
+  payload           Json?
+  attemptCount      Int      @default(0)
+  maxAttempts       Int      @default(3)
+  nextAttemptAt     DateTime @default(now())
+  leaseExpiresAt    DateTime?
+  lastErrorCategory String?
+  startedAt         DateTime @default(now())
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  finishedAt        DateTime?
+  completedAt       DateTime?
+  result            Json?
+  errorCode         String?
+  errorMessage      String?
+  @@index([jobKey, status, nextAttemptAt])
+  @@index([status, leaseExpiresAt])
+  @@index([jobKey, startedAt])
+}
+
+
+model MetaWebhookEvent {
+  id          String   @id @default(cuid())
+  eventId     String   @unique
+  eventType   String
+  senderId    String?
+  postId      String?
+  messageText String?
+  receivedAt  DateTime @default(now())
+  @@index([eventType, receivedAt])
+  @@index([senderId, receivedAt])
+  @@index([senderId, eventType])
+}

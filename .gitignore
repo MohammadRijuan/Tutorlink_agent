@@ -1,0 +1,10 @@
+node_modules
+.next
+dist
+.env
+.env.*
+!.env.example
+*.tsbuildinfo
+.vercel
+apps/api/assets/bin/*
+!apps/api/assets/bin/.gitkeep

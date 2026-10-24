@@ -1,0 +1,3 @@
+import { DashboardShell } from "@/components/layout/dashboard-shell";
+import { OverviewWorkspace } from "@/components/workspace/modules";
+export function OverviewPage() { return <DashboardShell><div className="content"><div className="page-heading"><div><div className="eyebrow">Organic growth / Control room</div><h1>Grow with evidence.<br/>Not guesswork.</h1><p>An organic marketing workspace focused on qualified tuition leads. Insights and recommendations use connected data; the system starts safely paused.</p></div><span className="status-pill"><span className="status-dot"/>Live status</span></div><OverviewWorkspace/></div></DashboardShell>; }

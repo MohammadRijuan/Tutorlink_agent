@@ -1,0 +1,19 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "npm install",
+  "buildCommand": "npm run vercel-build",
+  "outputDirectory": "public",
+  "rewrites": [{ "source": "/(.*)", "destination": "/api" }],
+  "functions": {
+    "api/index.js": {
+      "maxDuration": 300,
+      "memory": 1769,
+      "includeFiles": "{assets/**,dist/**}"
+    }
+  },
+  "crons": [
+    { "path": "/api/cron/performance-monitor", "schedule": "0 3 * * *" },
+    { "path": "/api/cron/content-generation", "schedule": "30 3 * * *" }
+  ]
+}

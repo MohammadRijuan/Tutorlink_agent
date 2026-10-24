@@ -1,0 +1,31 @@
+{
+  "name": "tutorlink-ai-marketing-manager",
+  "private": true,
+  "version": "1.0.0",
+  "workspaces": [
+    "apps/web",
+    "apps/api",
+    "packages/shared"
+  ],
+  "scripts": {
+    "dev": "concurrently -n api,web -c blue,magenta \"npm run dev -w @tutorlink/api\" \"npm run dev -w @tutorlink/web\"",
+    "build": "npm run db:generate && npm run build -w @tutorlink/shared && npm run build -w @tutorlink/api && npm run build -w @tutorlink/web",
+    "lint": "npm run lint -w @tutorlink/api && npm run lint -w @tutorlink/web",
+    "db:generate": "npm run db:generate -w @tutorlink/api",
+    "db:migrate": "npm run db:migrate -w @tutorlink/api",
+    "db:studio": "npm run db:studio -w @tutorlink/api",
+    "admin:create": "npm run admin:create -w @tutorlink/api",
+    "db:deploy": "npm run db:deploy -w @tutorlink/api",
+    "test": "npm run test -w @tutorlink/api",
+    "db:preflight": "npm run db:preflight -w @tutorlink/api",
+    "db:verify": "npm run db:verify -w @tutorlink/api",
+    "db:setup": "npm run db:setup -w @tutorlink/api"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "typescript": "^5.8.3"
+  },
+  "engines": {
+    "node": "22.x"
+  }
+}
