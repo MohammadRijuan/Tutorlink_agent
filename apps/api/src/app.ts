@@ -7,6 +7,8 @@ import { systemRouter } from "./routes/system.routes.js";
 import { authRouter } from "./modules/auth/auth.routes.js";
 import { requireAdmin, requireAuth } from "./modules/auth/auth.middleware.js";
 import { workspaceRouter } from "./modules/workspace.routes.js";
+import { shareRouter } from "./modules/share.routes.js";
+import { prisma } from "./lib/prisma.js";
 import { generateScheduledDraft } from "./modules/content/automation.service.js";
 import { runPerformanceMonitor } from "./modules/performance.service.js";
 import { processDueContentJobs } from "./modules/jobs/jobs.service.js";
@@ -100,6 +102,9 @@ export function createApp() {
 
   // Public liveness endpoint; all other versioned system routes require a valid admin JWT.
   app.get("/health", (_req, res) => res.status(200).json({ status: "ok", service: "tutorlink-ai-marketing-manager-api" }));
+  // Keep-warm endpoint for a free uptime pinger: wakes the function AND the Neon database (which sleeps after ~5 idle minutes). Exposes no data.
+  app.get("/health/warm", async (_req, res) => { try { await prisma.$queryRaw`SELECT 1`; return res.status(200).json({ status: "warm" }); } catch { return res.status(503).json({ status: "database-unreachable" }); } });
+  app.use("/s", shareRouter);
   app.use("/api/v1/auth", authRouter);
   app.use("/api/v1", requireAuth, requireAdmin, systemRouter);
   app.use("/api/v1", requireAuth, requireAdmin, workspaceRouter);

@@ -3,10 +3,12 @@ import { banglaLetterRatio, findForeignContactDetails, findProhibitedClaims, REQ
 import { dataUrlToBuffer, svgVisibleText } from "../content/render.service.js";
 import { findUnsupportedCharacters, resolveFontsDir } from "../../lib/fonts.js";
 import { messengerBaseUrl } from "./messenger-link.js";
+import { env } from "../../config/env.js";
+import { publicBaseUrl } from "../share.routes.js";
 import { resolveReelFrameTexts } from "./reel-frames.js";
 
 export type PublishCheck = { id: string; label: string; ok: boolean; detail?: string };
-export type CheckableContent = { id: string; title: string; format: string; caption: string; script: string | null; reelScenes?: unknown; assetUrl: string | null };
+export type CheckableContent = { id: string; title: string; format: string; caption: string; script: string | null; reelScenes?: unknown; assetUrl: string | null; linkAssetUrl?: string | null };
 
 const CTA_IN_TEXT = /মেসেঞ্জার|Messenger/i;
 
@@ -48,6 +50,18 @@ export async function runPublishChecks(content: CheckableContent): Promise<{ ok:
       const missing = findUnsupportedCharacters(text);
       add("creative-glyphs", "Every banner character can be drawn by the bundled font", missing.length === 0, missing.join(" ") || undefined);
     }
+  }
+  if (content.format !== "REEL") {
+    const wide = content.linkAssetUrl ? dataUrlToBuffer(content.linkAssetUrl) : null;
+    const base = publicBaseUrl();
+    const buttonReady = env.META_POST_STYLE === "auto" && Boolean(base) && Boolean(wide);
+    if (wide) {
+      const text = svgVisibleText(wide.toString("utf8"));
+      add("link-card-creative", "Link-card image shows phone, CTA and hashtag", text.includes(REQUIRED_PHONE) && text.includes(REQUIRED_CTA) && text.includes(REQUIRED_HASHTAG));
+    }
+    // Informational: never blocks publishing, because the agent safely falls back to a photo post with a Messenger link.
+    add("send-message-button", buttonReady ? "Native Send Message button will be attempted" : "Photo post with Messenger link (no native button)", true,
+      buttonReady ? "Link card with the Send Message button; automatic fallback to photo + link if Meta rejects it." : !base ? "Set PUBLIC_API_URL to this API's https address to enable the native button." : env.META_POST_STYLE === "photo" ? "META_POST_STYLE=photo" : "No link-card image on this draft.");
   }
   return { ok: checks.every(check => check.ok), checks };
 }

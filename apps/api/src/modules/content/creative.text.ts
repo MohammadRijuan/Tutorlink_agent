@@ -1,4 +1,3 @@
-import sharp from "sharp";
 import { CREATIVE_FONT_FAMILY, ensureFontConfig, sanitizeForCreative } from "../../lib/fonts.js";
 
 const escapeMarkup = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -7,6 +6,7 @@ const widthCache = new Map<string, number>();
 /** Width in px of `text` as the renderer will actually draw it (same Pango/HarfBuzz shaping as the final image). */
 export async function measureTextWidth(text: string, size: number, weight: "Regular" | "Bold" | "ExtraBold" = "ExtraBold"): Promise<number> {
   ensureFontConfig();
+  const sharp = (await import("sharp")).default; // lazy: keeps cold starts of ordinary dashboard calls fast
   const key = `${weight}|${size}|${text}`;
   const cached = widthCache.get(key);
   if (cached !== undefined) return cached;
@@ -32,7 +32,19 @@ export async function layoutLines(rawText: string, options: { maxWidth: number; 
       if (current !== undefined && (await measureTextWidth(`${current} ${word}`, size, weight)) <= options.maxWidth) lines[lines.length - 1] = `${current} ${word}`;
       else lines.push(word);
     }
-    if (ok && lines.length <= options.maxLines) return { lines, fontSize: size, truncated: false };
+    if (ok && lines.length <= options.maxLines) {
+      // Avoid a lonely last word: pull one word down from the line above when that still fits.
+      const last = lines.length - 1;
+      if (last >= 1 && !lines[last]!.includes(" ")) {
+        const previousWords = lines[last - 1]!.split(" ");
+        if (previousWords.length >= 3) {
+          const moved = previousWords.pop()!;
+          const candidate = `${moved} ${lines[last]}`;
+          if ((await measureTextWidth(candidate, size, weight)) <= options.maxWidth) { lines[last - 1] = previousWords.join(" "); lines[last] = candidate; }
+        }
+      }
+      return { lines, fontSize: size, truncated: false };
+    }
     if (index === options.sizes.length - 1) {
       // Smallest size still too long: keep what fits and mark the cut with an ellipsis.
       const kept = ok ? lines.slice(0, options.maxLines) : [];
@@ -44,4 +56,10 @@ export async function layoutLines(rawText: string, options: { maxWidth: number; 
     }
   }
   return { lines: [text], fontSize: options.sizes[options.sizes.length - 1] ?? 40, truncated: false };
+}
+
+/** Largest font size (from `sizes`, descending) at which a single line fits `maxWidth`; falls back to the smallest. */
+export async function fitSingleLine(text: string, maxWidth: number, sizes: number[], weight: "Regular" | "Bold" | "ExtraBold" = "ExtraBold"): Promise<number> {
+  for (const size of sizes) if ((await measureTextWidth(text, size, weight)) <= maxWidth) return size;
+  return sizes[sizes.length - 1] ?? 24;
 }

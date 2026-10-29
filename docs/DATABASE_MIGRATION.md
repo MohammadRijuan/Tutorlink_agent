@@ -4,7 +4,7 @@
 Neon's free plan allows several projects. Create a **new** Neon project/database just for this app, then:
 ```bash
 npm run db:preflight   # reads the database and says what is safe
-npm run db:deploy      # prisma migrate deploy (applies the 7 migrations in order)
+npm run db:deploy      # prisma migrate deploy (applies the 8 migrations in order)
 npm run db:verify      # proves the live schema matches prisma/schema.prisma
 # or all three:  npm run db:setup
 ```
@@ -27,4 +27,4 @@ but has not recorded this project's migrations: `migrate deploy` would then try 
 Never run `prisma migrate reset` or `db push --force-reset` against a database that holds data you care about.
 
 ## What was tested
-Against a real PostgreSQL 16: all 7 migrations apply in order on an empty database; `db:verify` then reports all 13 tables, 3 enums, every column's type and nullability, and every declared index matching `schema.prisma` (it also correctly fails when a column or index is removed). The drifted-database scenario above was reproduced and the printed recovery plan was executed to a verified-correct schema.
+Against a real PostgreSQL 16: all 8 migrations apply in order on an empty database; `db:verify` then reports all 13 tables, 3 enums, every column's type and nullability, and every declared index matching `schema.prisma` (it also correctly fails when a column or index is removed). The drifted-database scenario above was reproduced and the printed recovery plan was executed to a verified-correct schema.

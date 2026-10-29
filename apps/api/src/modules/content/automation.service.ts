@@ -4,11 +4,14 @@ import { env } from "../../config/env.js";
 import { classifyFailure } from "../../lib/retry.js";
 import { generateDraft } from "./content.service.js";
 import { decideNextContent } from "./agent-strategy.service.js";
-import { createBrandedAsset, resolveVisualStyle } from "./asset.service.js";
+import { buildCreativeForDraft } from "./creative.service.js";
 import { assertAiBudget } from "../ai/ai.service.js";
+import { evaluateCadence, forecastFirstPost } from "./cadence.js";
+import { buildCreativeForDraft as buildCreative } from "./creative.service.js";
 import { automationActive, getAutomationState } from "../agent-control.service.js";
 import { publishContentItem, publishDueScheduledContent } from "../meta/publishing.service.js";
 import { messengerBaseUrl } from "../meta/messenger-link.js";
+import { MetaApiError } from "../meta/meta.service.js";
 
 const asJson = (value: unknown) => value as never;
 const STUCK_PUBLISHING_MINUTES = 10;
@@ -56,13 +59,10 @@ export async function runAutonomousCampaign(now = new Date(), guidanceOverride?:
   const recentReach = lastMetric?.uniqueMediaViews ?? lastMetric?.reach ?? null;
   const recentEngagement = lastMetric ? (lastMetric.reactions ?? 0) + (lastMetric.comments ?? 0) + (lastMetric.shares ?? 0) : null;
 
-  // Frequency guard (a required quality gate): hard caps first, then the evidence-based cadence.
-  if (publishedThisWeek >= env.MAX_POSTS_PER_7_DAYS) return recordSkip(`The weekly limit of ${env.MAX_POSTS_PER_7_DAYS} posts has been reached.`, { publishedThisWeek });
-  if (hoursSinceLastPost !== null && hoursSinceLastPost < env.MIN_HOURS_BETWEEN_POSTS) return recordSkip(`A post was published ${Math.round(hoursSinceLastPost)} hours ago; the minimum gap is ${env.MIN_HOURS_BETWEEN_POSTS} hours.`, { hoursSinceLastPost, qualifiedLeadsLast7Days: qualified });
-  // Adaptive cadence: daily when lead outcomes exist, wait ~3 days between experiments when no qualified lead is recorded.
-  if (qualified === 0 && hoursSinceLastPost !== null && hoursSinceLastPost < 71) {
-    return recordSkip("No qualified/booked lead is recorded in the last 7 days. Wait before the next test, review lead attribution, and avoid increasing volume without evidence.", { hoursSinceLastPost, qualifiedLeadsLast7Days: qualified, reach: recentReach, engagement: recentEngagement });
-  }
+  // Frequency guard (a required quality gate): weekly cap, minimum gap, and the evidence-based rhythm (see cadence.ts).
+  const oldestThisWeek = await prisma.contentItem.findFirst({ where: { status: "PUBLISHED", publishedAt: { gte: weekAgo } }, orderBy: { publishedAt: "asc" }, select: { publishedAt: true } });
+  const verdict = evaluateCadence({ now, lastPublishedAt: lastPublished?.publishedAt ?? null, oldestPublishedInWindow: oldestThisWeek?.publishedAt ?? null, publishedLast7Days: publishedThisWeek, qualifiedLeadsLast7Days: qualified, minHoursBetweenPosts: env.MIN_HOURS_BETWEEN_POSTS, noLeadWaitHours: env.NO_LEAD_WAIT_HOURS, maxPostsPer7Days: env.MAX_POSTS_PER_7_DAYS });
+  if (!verdict.allowed) return recordSkip(verdict.reason ?? "Cadence rules say wait.", { hoursSinceLastPost, qualifiedLeadsLast7Days: qualified, publishedThisWeek, requiredGapHours: verdict.requiredGapHours, earliestAt: verdict.earliestAt, reach: recentReach, engagement: recentEngagement });
 
   try { await assertAiBudget(); }
   catch (error) { return recordSkip(classifyFailure(error).message, { aiBudget: "exhausted" }); }
@@ -84,15 +84,11 @@ export async function runAutonomousCampaign(now = new Date(), guidanceOverride?:
     throw error;
   }
 
-  const snapshot = await prisma.pageSnapshot.findFirst({ orderBy: { fetchedAt: "desc" } });
-  const summary = snapshot?.rawSummary as { page?: { name?: string; picture?: string | null } } | null;
-  const recentStyles = await prisma.contentItem.findMany({ orderBy: { createdAt: "desc" }, take: 6, select: { visualStyle: true } });
-  const visualStyle = resolveVisualStyle("AUTO", `${draft.title}:${draft.caption}:${randomUUID()}`, recentStyles.map(item => item.visualStyle || ""));
-  const assetUrl = await createBrandedAsset({ title: draft.title, pageName: summary?.page?.name || snapshot?.pageName || "TutorLink Tuition Media", profilePicture: summary?.page?.picture || snapshot?.profilePicture || null, format: decision.format, visualStyle });
+  const { visualStyle, designPalette, assetUrl, linkAssetUrl } = await buildCreativeForDraft({ title: draft.title, subtitle: draft.subtitle, caption: draft.caption, format: decision.format });
   const content = await prisma.contentItem.create({ data: {
     title: draft.title, format: decision.format, topic: decision.topic, creativeAngle: decision.creativeAngle,
-    visualStyle, language: "bn", caption: draft.caption, hashtags: asJson(draft.hashtags), callToAction: "মেসেঞ্জারে যোগাযোগ করুন",
-    script: draft.script, reelScenes: draft.reelScenes ? asJson(draft.reelScenes) : undefined, assetUrl, status: "DRAFT",
+    visualStyle, designPalette, subtitle: draft.subtitle, language: "bn", caption: draft.caption, hashtags: asJson(draft.hashtags), callToAction: "মেসেঞ্জারে যোগাযোগ করুন",
+    script: draft.script, reelScenes: draft.reelScenes ? asJson(draft.reelScenes) : undefined, assetUrl, linkAssetUrl, status: "DRAFT",
   } });
   const runId = `autonomous-campaign-${now.toISOString().slice(0, 10)}-${content.id}`;
   const fallbackFrom = "fallbackFrom" in draft ? draft.fallbackFrom || null : null;
@@ -124,4 +120,68 @@ export async function runAutonomousCampaign(now = new Date(), guidanceOverride?:
 /** Backwards-compatible alias for older cron clients. */
 export async function generateScheduledDraft(now = new Date(), guidanceOverride?: string) {
   return runAutonomousCampaign(now, guidanceOverride, { allowDryRunDraft: false });
+}
+
+
+/** What the agent will do at its next scheduled run, and why. Read-only; powers the "Agent outlook" panels. */
+export async function getCampaignOutlook(now = new Date()) {
+  const state = await getAutomationState();
+  const weekAgo = new Date(now.getTime() - 7 * 86400000);
+  const [lastPublished, oldest, publishedLast7Days, leads, stuck, nextScheduled] = await Promise.all([
+    prisma.contentItem.findFirst({ where: { status: "PUBLISHED", publishedAt: { not: null } }, orderBy: { publishedAt: "desc" }, select: { id: true, title: true, format: true, publishedAt: true } }),
+    prisma.contentItem.findFirst({ where: { status: "PUBLISHED", publishedAt: { gte: weekAgo } }, orderBy: { publishedAt: "asc" }, select: { publishedAt: true } }),
+    prisma.contentItem.count({ where: { status: "PUBLISHED", publishedAt: { gte: weekAgo } } }),
+    prisma.lead.count({ where: { createdAt: { gte: weekAgo }, status: { in: ["QUALIFIED", "BOOKED"] } } }),
+    prisma.contentItem.count({ where: { status: "PUBLISHING" } }),
+    prisma.contentItem.findFirst({ where: { status: "SCHEDULED", scheduledAt: { gt: now }, platformPostId: null }, orderBy: { scheduledAt: "asc" }, select: { id: true, title: true, scheduledAt: true } }),
+  ]);
+  const input = { now, lastPublishedAt: lastPublished?.publishedAt ?? null, oldestPublishedInWindow: oldest?.publishedAt ?? null, publishedLast7Days, qualifiedLeadsLast7Days: leads, minHoursBetweenPosts: env.MIN_HOURS_BETWEEN_POSTS, noLeadWaitHours: env.NO_LEAD_WAIT_HOURS, maxPostsPer7Days: env.MAX_POSTS_PER_7_DAYS };
+  const forecast = forecastFirstPost(input);
+  const blockers: string[] = [];
+  if (state.paused) blockers.push("Automation is paused.");
+  if (!state.paused && !state.agentMode) blockers.push("Agent Mode is OFF, so the agent will not post by itself.");
+  if (env.META_PUBLISH_MODE !== "live") blockers.push("Publishing is in dry-run mode (META_PUBLISH_MODE), so nothing goes to Facebook.");
+  if (!env.META_PAGE_ID || !env.META_PAGE_ACCESS_TOKEN) blockers.push("Facebook Page ID / token are not configured.");
+  try { messengerBaseUrl(); } catch { blockers.push("The verified Messenger URL (META_MESSENGER_URL) is missing."); }
+  if (stuck > 0) blockers.push("A previous publish is stuck in Publishing: check the Page and click Confirm not on Facebook.");
+  return {
+    agentMode: !state.paused && state.agentMode, paused: state.paused, publishMode: env.META_PUBLISH_MODE,
+    lastPost: lastPublished ? { id: lastPublished.id, title: lastPublished.title, format: lastPublished.format, publishedAt: lastPublished.publishedAt } : null,
+    qualifiedLeadsLast7Days: leads, publishedLast7Days, requiredGapHours: forecast.verdictNow.requiredGapHours, leadMode: forecast.verdictNow.leadMode,
+    nextRunAt: forecast.nextRunAt, willPostAtNextRun: blockers.length === 0 && forecast.willPostAtNextRun, firstPostAt: forecast.firstPostAt,
+    reasonNow: forecast.verdictNow.reason, blockers, nextScheduled,
+  };
+}
+
+/**
+ * Human-triggered creation from the dashboard ("Create now"): choose Post or Reel, optionally a topic, and either save a preview or publish immediately.
+ * It deliberately bypasses the posting-rhythm rules (a person asked) but never the safety checks: validation, claims, fonts, pre-publish checks and duplicate protection all still apply.
+ */
+export async function createContentNow(options: { format: "AUTO" | "POST" | "REEL"; topic?: string; guidance?: string; publish: boolean; actor: string }) {
+  if (options.publish) {
+    if (env.META_PUBLISH_MODE !== "live") throw new MetaApiError("Publishing is in dry-run mode. Set META_PUBLISH_MODE=live on the API project and redeploy, or create a preview instead.", 400);
+    if (!env.META_PAGE_ID || !env.META_PAGE_ACCESS_TOKEN) throw new MetaApiError("Configure META_PAGE_ID and META_PAGE_ACCESS_TOKEN before publishing.", 400);
+    messengerBaseUrl();
+    const stuck = await prisma.contentItem.findFirst({ where: { status: "PUBLISHING" }, select: { id: true } });
+    if (stuck) throw new MetaApiError("An earlier publish is stuck in Publishing. Check the Facebook Page, then click Confirm not on Facebook on that draft.", 409);
+  }
+  await assertAiBudget();
+  const state = await getAutomationState();
+  const guidance = options.guidance?.trim() || state.guidance;
+  const decision = await decideNextContent(guidance);
+  const format = options.format === "AUTO" ? decision.format : options.format;
+  const topic = options.topic?.trim() ? options.topic.trim().slice(0, 200) : decision.topic;
+  const recent = await prisma.contentItem.findMany({ orderBy: { createdAt: "desc" }, take: 40, select: { title: true, topic: true, format: true, caption: true, creativeAngle: true } });
+  const draft = await generateDraft({ topic, format, audience: decision.audience, goal: decision.goal, creativeAngle: decision.creativeAngle, visualStyle: "AUTO", guidance, avoidRecent: recent });
+  const { visualStyle, designPalette, assetUrl, linkAssetUrl } = await buildCreative({ title: draft.title, subtitle: draft.subtitle, caption: draft.caption, format });
+  const content = await prisma.contentItem.create({ data: {
+    title: draft.title, format, topic, creativeAngle: decision.creativeAngle, visualStyle, designPalette, subtitle: draft.subtitle, language: "bn", caption: draft.caption,
+    hashtags: asJson(draft.hashtags), callToAction: "মেসেঞ্জারে যোগাযোগ করুন", script: draft.script, reelScenes: draft.reelScenes ? asJson(draft.reelScenes) : undefined, assetUrl, linkAssetUrl, status: "DRAFT",
+  } });
+  await prisma.agentDecision.create({ data: { runId: `manual-create-now-${content.id}`, category: "MANUAL_CONTENT_NOW", observation: asJson(decision.observation), hypothesis: `Created on request by ${options.actor}: ${options.format === "AUTO" ? "agent-chosen" : options.format} format${options.topic?.trim() ? ", operator-chosen topic" : ""}.`, confidence: decision.confidence, action: asJson({ contentId: content.id, topic, format, published: false, requestedPublish: options.publish }) } });
+  await prisma.auditEvent.create({ data: { actor: options.actor, action: "CONTENT_CREATED_NOW", entityType: "ContentItem", entityId: content.id, details: asJson({ format, provider: draft.provider, model: draft.model, publishRequested: options.publish }) } });
+  if (!options.publish) return { contentId: content.id, format, topic, published: false as const };
+  const published = await publishContentItem(content.id, options.actor);
+  await prisma.agentDecision.updateMany({ where: { runId: `manual-create-now-${content.id}` }, data: { outcome: asJson({ published: true, postId: published.postId }) } });
+  return { contentId: content.id, format, topic, published: true as const, result: published };
 }

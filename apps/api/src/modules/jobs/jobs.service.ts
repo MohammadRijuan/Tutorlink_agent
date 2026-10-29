@@ -4,7 +4,7 @@ import { z } from "zod";
 import { env } from "../../config/env.js";
 import { prisma } from "../../lib/prisma.js";
 import { classifyFailure, OperationError } from "../../lib/retry.js";
-import { createBrandedAsset, resolveVisualStyle } from "../content/asset.service.js";
+import { buildCreativeForDraft } from "../content/creative.service.js";
 import { assertAiBudget } from "../ai/ai.service.js";
 import { CREATIVE_ANGLES, VISUAL_STYLES, generateDraft, type GenerateInput } from "../content/content.service.js";
 
@@ -27,6 +27,7 @@ const draftSchema = z.object({
   caption: z.string().min(1).max(10000),
   hashtags: z.array(z.string().max(80)).max(10),
   script: z.string().max(10000).nullable(),
+  subtitle: z.string().max(300).nullable().optional(),
   reelScenes: z.array(z.string().max(200)).max(6).nullable().optional(),
   model: z.string().max(180),
   provider: z.string().max(40),
@@ -264,17 +265,7 @@ async function runClaimedJob(job: Claim) {
   }
 
   if (automatic && !(await automationEnabled())) return deferForHumanTakeover(job);
-  const snapshot = await prisma.pageSnapshot.findFirst({ orderBy: { fetchedAt: "desc" } });
-  const summary = snapshot?.rawSummary as { page?: { name?: string; picture?: string | null } } | null;
-  const recentStyles = await prisma.contentItem.findMany({ orderBy: { createdAt: "desc" }, take: 6, select: { visualStyle: true } });
-  const visualStyle = resolveVisualStyle(input.visualStyle || "AUTO", `${draft.title}:${draft.caption}:${randomUUID()}`, recentStyles.map(item => item.visualStyle || ""));
-  const assetUrl = await createBrandedAsset({
-    title: draft.title,
-    pageName: summary?.page?.name || snapshot?.pageName || "TutorLink Tuition Media",
-    profilePicture: summary?.page?.picture || snapshot?.profilePicture || null,
-    format: input.format,
-    visualStyle,
-  });
+  const { visualStyle, designPalette, assetUrl, linkAssetUrl } = await buildCreativeForDraft({ title: draft.title, subtitle: draft.subtitle, caption: draft.caption, format: input.format, requestedStyle: input.visualStyle });
   await prisma.$transaction(async (tx) => {
     if (automatic) {
       const safety = await tx.$queryRaw<Array<{ key: string; value: unknown }>>`
@@ -299,6 +290,7 @@ async function runClaimedJob(job: Claim) {
         callToAction: "মেসেঞ্জারে যোগাযোগ করুন",
         script: draft.script,
         reelScenes: draft.reelScenes ? toJson(draft.reelScenes) : undefined,
+        subtitle: draft.subtitle, designPalette, linkAssetUrl,
         assetUrl,
         status: "DRAFT",
       },

@@ -83,6 +83,9 @@ model ContentItem {
   assetUrl         String?
   script           String?
   reelScenes       Json?
+  subtitle         String?
+  designPalette    String?
+  linkAssetUrl     String?
   status           ContentStatus @default(IDEA)
   scheduledAt      DateTime?
   publishedAt      DateTime?

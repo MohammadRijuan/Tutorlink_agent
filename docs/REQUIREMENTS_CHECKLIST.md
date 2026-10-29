@@ -1,6 +1,6 @@
 # Requirements checklist: instruction → implementation → evidence
 
-Evidence legend: **U** = automated unit test (49 pass) · **E** = end-to-end test: real Express app + real PostgreSQL 16 with Meta mocked at the network layer (52 checks pass) · **R** = rendered and inspected (images/MP4) · **D** = real-database migration test · **S** = must be confirmed on your live deployment (Settings → Deployment self-check / manual staging steps).
+Evidence legend: **U** = automated unit test (see the v1.1 count below) · **E** = end-to-end test: real Express app + real PostgreSQL 16 with Meta mocked at the network layer (see the v1.1 count below) · **R** = rendered and inspected (images/MP4) · **D** = real-database migration test · **S** = must be confirmed on your live deployment (Settings → Deployment self-check / manual staging steps).
 
 | Requirement (PRD / RULES) | Status | Evidence |
 |---|---|---|
@@ -44,8 +44,27 @@ Evidence legend: **U** = automated unit test (49 pass) · **E** = end-to-end tes
 * **Not testable from source alone:** your real Meta Page and token, your Gemini/Groq keys, Graph API v26.0 behaviour at publish time, Meta App Review, the Vercel runtime. Meta calls were verified against a mock that follows Meta's documented request flow; use the staging checklist.
 * Model names are config (`gemini-flash-latest` etc.); if Google/Groq retire one, the chain falls to the next and *Test every model* shows it.
 * I could not run `prisma generate` with the standard engine in my sandbox (engine downloads are blocked there). The application code was run against real PostgreSQL through Prisma's engine-free client; the standard engine is what Vercel/your machine will use and is the normal, widely deployed path.
-* A native "Send Message" button on an organic post cannot be added through the API; each post has a visible Messenger CTA and a clickable link instead (add a Send Message button on the Page itself).
+* **Correction (v1.1):** v1.0 said a native Send Message button could not be added. Meta's Page Feed reference documents a `call_to_action` on link posts, so v1.1 publishes feed posts as link cards with the button and falls back to photo + link if Meta rejects it. It is verified against a mock only; confirm on your Page. Reels still cannot carry a native button.
 * Reel ids: Meta returns a video id; the stored id may differ from the later post id; matching uses id suffixes to cope.
 * "Roll back strategies that increase negative feedback" is only partly possible: Meta organic insights do not expose complaint counts, so the agent learns from qualified leads and your corrections.
 * Booking outcomes depend on you labelling leads BOOKED.
 * Vercel Hobby is non-commercial and daily-cron only; Gemini/Groq free quotas can change.
+
+
+## Version 1.1: changes requested after the first deployment
+| Request | What changed | Evidence |
+|---|---|---|
+| Reactions/comments/shares show "—" | Root cause: one bundled Meta request failed and the code silently dropped all three. Now each metric is fetched separately and the real Meta error and fix are shown (Page analyzer → Data gaps). Missing permission to add: `pages_read_user_content`, then a NEW token. | U |
+| Unique media views always 0 | Meta returns an impossible 0 for posts that have views; now treated as *unavailable*, never as zero, with an explanation | U |
+| Posting every 3 days is too slow | Rhythm is now daily with qualified leads, **every 2 days** without (`NO_LEAD_WAIT_HOURS=40`); forecast shown on the Calendar and Overview | U (7 cadence tests), E |
+| "What is the Publishing calendar for?" | Page rewritten; shows the next run, whether it will post or wait and why, the last post, and recently published posts | E |
+| Could not test Reels | **Create now** (Content studio): choose Post/Reel/agent's choice, preview or publish immediately; safety checks still apply | E (real MP4 upload) |
+| Steps ran together in the caption | Prompt requires a hook, one numbered step per line, takeaway and call-to-action; a formatter fixes dense paragraphs; all hashtags are now actually posted (v1.0 dropped all but one) | U |
+| Wanted the native Messenger button, not a link | Link-card posts with Meta's Send Message call-to-action, public share page for the card image, safe fallbacks | E (mock Meta) |
+| New banner style like the sample; designs must differ every time | 10 layouts × 8 palettes (one modelled on your banner), subtitle line, wide card variant; no layout repeats within 5 posts, no palette within 3 | R, U |
+| Owner's real services | Business facts now start from your banner (programs, CUET/CU/CMC, verified teachers); credential claims are allowed only when you list them | U |
+| Site slow | Removed the API call from every navigation; browser cache + prefetch; images as cacheable PNGs (list payload ~15 KB per draft → none); Singapore region; lazy-loaded image engine; keep-warm endpoint | E, measured |
+| "What do I do / what does it do if it fails or gets no leads" | `docs/AGENT_PLAYBOOK.md`; dashboard "Needs your attention" list | E |
+| Bangla hashtag/vowel-sign bug | Hashtags with vowel signs (#হোমটিউটর) and subject names like গণিত were being damaged by letter-only patterns; fixed and tested | U |
+
+Verification for v1.1: 70+ unit tests and a 52-check end-to-end run (real Express + real PostgreSQL, Meta mocked), a dashboard run through the Next.js proxy (sign-in, data endpoints, PNG delivery, cookie handling), all 10 layouts × 3 sizes rendered and inspected, a Reel MP4 rendered and inspected, and the production build path.

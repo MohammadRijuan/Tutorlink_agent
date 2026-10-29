@@ -17,12 +17,13 @@ export const businessProfileSchema = z.object({
 });
 export type BusinessProfileInput = z.infer<typeof businessProfileSchema>;
 
+/** Starting facts taken from TutorLink's own banner. Review and save them under Settings -> Business facts. */
 export const DEFAULT_PROFILE: BusinessProfileInput = {
   name: "TutorLink Tuition Media",
-  description: "হোম টিউটর খোঁজার ক্ষেত্রে অভিভাবকদের সহায়তাকারী টিউটর ম্যাচিং সেবা।",
+  description: "চট্টগ্রামে অভিভাবকদের জন্য স্বনামধন্য বিশ্ববিদ্যালয়ের গৃহশিক্ষক খুঁজে দেওয়ার সেবা।",
   serviceAreas: ["চট্টগ্রাম"],
-  supportedPrograms: [],
-  trustedFacts: [],
+  supportedPrograms: ["প্লে থেকে দ্বাদশ শ্রেণি", "NC", "BC", "O level ও A level", "ভর্তি পরীক্ষার্থী"],
+  trustedFacts: ["CUET, CU, CMC সহ স্বনামধন্য বিশ্ববিদ্যালয় থেকে গৃহশিক্ষক/শিক্ষিকা দেওয়া হয়", "দক্ষ ও ভেরিফায়েড শিক্ষক পেতে যোগাযোগ করা যায়"],
   prohibitedClaims: [],
 };
 
@@ -52,6 +53,6 @@ export async function loadBusinessContext(): Promise<BusinessContext> {
     const profile = await getBusinessProfile();
     return { name: profile.name, serviceAreas: profile.serviceAreas, supportedPrograms: profile.supportedPrograms, trustedFacts: profile.trustedFacts, prohibitedClaims: profile.prohibitedClaims };
   } catch {
-    return { name: DEFAULT_PROFILE.name, serviceAreas: DEFAULT_PROFILE.serviceAreas, supportedPrograms: [], trustedFacts: [], prohibitedClaims: [] };
+    return { name: DEFAULT_PROFILE.name, serviceAreas: DEFAULT_PROFILE.serviceAreas, supportedPrograms: DEFAULT_PROFILE.supportedPrograms, trustedFacts: DEFAULT_PROFILE.trustedFacts, prohibitedClaims: [] };
   }
 }

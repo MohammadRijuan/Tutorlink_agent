@@ -19,7 +19,7 @@ export function containsBanglaScript(text: string): boolean {
 /** Share of Bangla letters among all letters, ignoring hashtags, URLs, the phone number and the brand name. */
 export function banglaLetterRatio(text: string): number {
   const cleaned = text
-    .replace(/https?:\/\/\S+/gi, " ").replace(/#[\p{L}\p{N}_]+/gu, " ").replace(/01886-603858/g, " ")
+    .replace(/https?:\/\/\S+/gi, " ").replace(/#[\p{L}\p{M}\p{N}_]+/gu, " ").replace(/01886-603858/g, " ")
     .replace(/TutorLink\s+Tuition\s+Media|Messenger|Facebook|Class|O\s*Level|A\s*Level|Cambridge|Edexcel/gi, " ");
   const letters = cleaned.match(/\p{L}/gu) ?? [];
   if (letters.length === 0) return 0;
@@ -43,9 +43,9 @@ const BUILT_IN_CLAIM_PATTERNS: Array<{ id: string; pattern: RegExp }> = [
 ];
 
 /** Returns the ids/phrases of unsupported claims found. Empty array means the text is clean. */
-export function findProhibitedClaims(text: string, extraPhrases: string[] = []): string[] {
+export function findProhibitedClaims(text: string, extraPhrases: string[] = [], options: { allowCredentials?: boolean } = {}): string[] {
   const hits: string[] = [];
-  for (const { id, pattern } of BUILT_IN_CLAIM_PATTERNS) if (pattern.test(text)) hits.push(id);
+  for (const { id, pattern } of BUILT_IN_CLAIM_PATTERNS) { if (id === "tutor-credentials" && options.allowCredentials) continue; if (pattern.test(text)) hits.push(id); }
   if (PRICE_PATTERNS.some(pattern => pattern.test(text))) hits.push("price");
   const lower = text.toLocaleLowerCase();
   for (const phrase of extraPhrases) if (phrase && lower.includes(phrase.toLocaleLowerCase())) hits.push(`phrase:${phrase}`);

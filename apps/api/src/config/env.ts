@@ -25,6 +25,12 @@ const envSchema = z.object({
 
   FFMPEG_PATH: optionalString,
 
+  // Public https URL of THIS API deployment (used for the Send Message link card that Facebook fetches).
+  // If empty on Vercel, VERCEL_PROJECT_PRODUCTION_URL is used automatically.
+  PUBLIC_API_URL: optionalString.refine(value => !value || URL.canParse(value), "PUBLIC_API_URL must be a valid URL"),
+  // auto = try a link post with the native "Send Message" button first, fall back to photo + link; photo = always photo + link
+  META_POST_STYLE: z.enum(["auto", "photo"]).default("auto"),
+
   // --- Free AI providers (no paid fallback exists in this codebase) ---
   // "auto" uses the chains below; "template" never calls an AI provider (offline development only).
   AI_PROVIDER: z.enum(["auto", "template", "groq", "gemini"]).default("auto"),
@@ -45,6 +51,9 @@ const envSchema = z.object({
   // Frequency guard applied to every autonomous publication.
   MAX_POSTS_PER_7_DAYS: z.coerce.number().int().min(1).max(21).default(7),
   MIN_HOURS_BETWEEN_POSTS: z.coerce.number().min(1).max(168).default(20),
+  // With NO qualified/booked lead recorded in 7 days the agent waits this long between posts (40 h = every 2nd daily run).
+  // Set equal to MIN_HOURS_BETWEEN_POSTS to post on every run regardless of lead data.
+  NO_LEAD_WAIT_HOURS: z.coerce.number().min(1).max(168).default(40),
 });
 
 const parsed = envSchema.safeParse(process.env);

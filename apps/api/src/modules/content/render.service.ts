@@ -1,9 +1,9 @@
-import sharp from "sharp";
 import { ensureFontConfig } from "../../lib/fonts.js";
 
 /** Single choke point for rasterising creatives, so fonts are always configured first. */
 export async function svgToPng(svg: Buffer | string): Promise<Buffer> {
   ensureFontConfig();
+  const sharp = (await import("sharp")).default;
   return sharp(Buffer.isBuffer(svg) ? svg : Buffer.from(svg, "utf8"), { density: 72 }).png().toBuffer();
 }
 

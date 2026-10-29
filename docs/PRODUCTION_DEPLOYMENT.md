@@ -39,6 +39,7 @@ Do the steps **in order**. Total time: about 45 minutes. Nothing here enables bi
 | `GEMINI_API_KEY`, `GROQ_API_KEY` | your free keys (at least one) |
 | `META_PAGE_ID`, `META_PAGE_ACCESS_TOKEN`, `META_APP_SECRET`, `META_VERIFY_TOKEN` | from Meta (verify token = any random string you choose) |
 | `META_MESSENGER_URL` | `https://m.me/<your-page-username>` |
+| `PUBLIC_API_URL` | this API project's own https address, e.g. `https://tutorlink-agent-api.vercel.app` (enables the native **Send Message** button) |
 | `META_PUBLISH_MODE` | `dry-run` (switch to `live` only in step 6) |
 
 4. Deploy. Open `https://<api>.vercel.app/health`; it must return `{"status":"ok"...}`.
@@ -62,8 +63,8 @@ Do the steps **in order**. Total time: about 45 minutes. Nothing here enables bi
    curl -X POST "https://graph.facebook.com/v26.0/$PAGE_ID/subscribed_apps" \
      -d "subscribed_fields=messages,messaging_postbacks,messaging_referrals,feed" -d "access_token=$PAGE_TOKEN"
    ```
-3. Permissions the Page token needs: `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`, `pages_messaging`, `read_insights`. While the Meta app is in *Development* mode only people with a role on the app can message/comment and be captured; for the public you need Meta's Advanced Access (App Review) and the app set to *Live*.
-4. In the Page's own settings add a **Send Message** button too; the API cannot add a native button to an organic post, so each post carries a visible Messenger CTA on the creative plus a clickable link in the caption (`m.me/...?ref=tl_<postid>`, which is what attributes each enquiry to its post).
+3. Permissions the Page token needs: `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`, `pages_manage_metadata`, `pages_messaging`, `read_insights` and **`pages_read_user_content`** (without it Meta usually refuses to return reactions and comments, which show as "—"). After adding permissions you must **generate a NEW Page access token**, update `META_PAGE_ACCESS_TOKEN` in Vercel and redeploy; the old token keeps the old permissions. Page analyzer → *Data gaps* shows Meta's exact answer for anything still missing. While the Meta app is in *Development* mode only people with a role on the app can message/comment and be captured; for the public you need Meta's Advanced Access (App Review) and the app set to *Live*.
+4. Feed posts are published as a **link card with Meta's native Send Message button** (needs `PUBLIC_API_URL`). If Meta rejects the button the agent automatically posts a photo with a Messenger link instead. Reels cannot carry a native button; they end on a card with your number and the caption has the link. Also add a **Send Message** button on the Page itself in Facebook's Page settings.
 
 ## 6. Staging checklist → go live
 Stay in `dry-run` until each line passes.
@@ -74,15 +75,22 @@ Stay in `dry-run` until each line passes.
 5. Click the caption link from a tester account and send a message → the lead shows "Attributed to a post".
 6. Only now switch **Agent Mode ON** (top bar). Vercel Cron then runs daily: 03:00 UTC performance import, 03:30 UTC (09:30 Bangladesh time) campaign. The agent may wait instead of posting.
 
-## 7. Vercel Hobby notes
+## 7. Speed (make the dashboard feel instant)
+* **Region:** both projects are pinned to Singapore (`sin1`) in `vercel.json`. Create your Neon project in **AWS Singapore (ap-southeast-1)** so the function and the database are next to each other and close to Bangladesh. A US region adds ~200 ms to every database call.
+* The dashboard caches data in the browser and pre-loads the main pages after sign-in; images are real cacheable PNGs; the first click after a long idle can still take 1 to 3 seconds (see below).
+* **Cold starts:** a free Vercel function sleeps when unused and Neon's free database sleeps after ~5 idle minutes. To keep the **function** warm, add a free pinger (UptimeRobot or cron-job.org) on `https://<api>.vercel.app/health` every 5 minutes. Do **not** point a 24/7 pinger at `/health/warm`: that wakes the database and can use up Neon's monthly free compute allowance; check your Neon plan before using it, and only during limited hours.
+
+## 8. Vercel Hobby notes
 * Hobby allows daily crons only (that is why there are two). Hobby is for **non-commercial** use under Vercel's terms; a business page should move to Vercel Pro ($20/month) or another host when you can. The code has no Vercel-specific lock-in apart from `vercel.json`.
 * Free AI quotas are set by Google/Groq per account and can change; the app degrades by skipping runs, never by spending money.
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 | Symptom | Cause / fix |
 |---|---|
 | Self-check: *Latest migration is missing* | Run `npm run db:deploy` with `DIRECT_URL` pointing at the same Neon database. |
 | Self-check: *FFmpeg* red | The build step `prepare-assets` could not copy the binary; check the build log. Reels fall back to photo posts. |
+| Reactions/comments show "—" | Add `pages_read_user_content`, make a NEW Page token, update `META_PAGE_ACCESS_TOKEN`, redeploy. See Page analyzer → Data gaps. |
+| Posts go out as photo + link, not a button | `PUBLIC_API_URL` is empty, or Meta rejected the button (shown in the Learning log). Photo + link is the designed fallback. |
 | Self-check: *fonts* red | `assets/fonts/*.ttf` missing from the deployment; do not delete them. |
 | Run says *free quotas are used up* | Wait for the quota reset or add the second provider's key. |
 | Agent turned itself OFF | Read *Learning log*: it auto-pauses on revoked permissions, uncertain publishes, or 3 failures in 48 h. Check the Page, fix the cause, turn ON. |

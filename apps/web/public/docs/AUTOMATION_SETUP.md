@@ -9,7 +9,7 @@
 2. In live mode require Page credentials and a verified `META_MESSENGER_URL`.
 3. Stop if an earlier publish is stuck in PUBLISHING (uncertain Facebook state) until a human resolves it.
 4. Publish any operator-scheduled item that is due.
-5. Frequency guard: at most `MAX_POSTS_PER_7_DAYS`, at least `MIN_HOURS_BETWEEN_POSTS` apart; with no qualified/booked lead recorded in 7 days, wait ~3 days between experiments.
+5. Frequency guard: at most `MAX_POSTS_PER_7_DAYS`, at least `MIN_HOURS_BETWEEN_POSTS` apart; with qualified/booked leads in the last 7 days post about daily (20 h gap); with none, wait `NO_LEAD_WAIT_HOURS` (default 40 h, about every 2nd run).
 6. Choose topic, audience, format (post/Reel), creative angle and visual style from evidence: recorded qualified/booked leads (attributed per post), unique media views, engagement, recent content, repeated subjects in enquiries, and per-angle results once an angle has 2+ measured posts. Your saved guidance is applied.
 7. Generate Bangla content with the free-model chain, validate it (Bangla ratio, no invented links/phones/prices/guarantees, business-profile prohibited claims, not a repeat), render the banner/Reel with the bundled Bangla font, run the pre-publish checks, re-check Agent Mode, publish, record experiments + audit + decision outcome.
 
@@ -19,7 +19,7 @@
 * AI triage is conservative: only a clear tuition enquiry becomes QUALIFIED; anything uncertain stays NEW. Correct labels in *Qualified leads*; the agent learns from your corrections.
 
 ## Publish requirements
-`META_PUBLISH_MODE=live`; valid `META_PAGE_ID` + `META_PAGE_ACCESS_TOKEN`; `META_MESSENGER_URL`; Agent Mode ON (for autonomous runs). Reels are 1080x1920 H.264 + silent AAC MP4 rendered with the bundled FFmpeg; if rendering fails before any upload, a validated photo post is published instead.
+`META_PUBLISH_MODE=live`; valid `META_PAGE_ID` + `META_PAGE_ACCESS_TOKEN`; `META_MESSENGER_URL`; Agent Mode ON (for autonomous runs). Feed posts are link cards with the native Send Message button (fallback: photo + link). Reels are 1080x1920 H.264 + silent AAC MP4 rendered with the bundled FFmpeg; if rendering fails before any upload, a validated photo post is published instead. See `AGENT_PLAYBOOK.md` for the full picture.
 
 ## Automatic safety pauses
 Revoked/expired token or permission (Meta 190/10/200/368, HTTP 401/403), an unclear publish outcome (dropped connection or 5xx at upload/finish), or three failed autonomous publishes in 48 hours switch Agent Mode OFF and pause automation; a human must re-enable it.

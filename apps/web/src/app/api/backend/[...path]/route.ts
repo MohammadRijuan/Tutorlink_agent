@@ -21,8 +21,13 @@ async function proxy(request: Request, context: { params: Promise<{ path: string
   try {
     const upstream = await fetch(target, { method: request.method, headers, body, cache: "no-store", signal: AbortSignal.timeout(285000) });
     if (upstream.status === 204) return new NextResponse(null, { status: 204 });
-    const payload = await upstream.text();
-    return new NextResponse(payload, { status: upstream.status, headers: { "content-type": upstream.headers.get("content-type") || "application/json; charset=utf-8", "cache-control": "no-store" } });
+    const type = upstream.headers.get("content-type") || "application/json; charset=utf-8";
+    const bytes = await upstream.arrayBuffer(); // binary-safe: banners are PNG
+    const cacheControl = type.startsWith("image/") && upstream.ok ? upstream.headers.get("cache-control") || "private, max-age=3600" : "no-store";
+    const extra: Record<string, string> = {};
+    const disposition = upstream.headers.get("content-disposition");
+    if (disposition) extra["content-disposition"] = disposition;
+    return new NextResponse(bytes, { status: upstream.status, headers: { "content-type": type, "cache-control": cacheControl, ...extra } });
   } catch (error) {
     if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
       return NextResponse.json({ error: { message: "The backend request timed out. The AI service may be taking longer than expected; please retry." } }, { status: 504 });

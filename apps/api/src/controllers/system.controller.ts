@@ -55,7 +55,7 @@ export async function getDiagnostics(_req: Request, res: Response) {
   };
   await run("database", "Database reachable", async () => { await prisma.$queryRaw`SELECT 1`; });
   await run("schema", "Database schema is up to date", async () => {
-    const rows = await prisma.$queryRaw<Array<{ column_name: string }>>`SELECT column_name::text AS column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'ContentItem' AND column_name = 'reelScenes'`;
+    const rows = await prisma.$queryRaw<Array<{ column_name: string }>>`SELECT column_name::text AS column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'ContentItem' AND column_name = 'linkAssetUrl'`;
     if (rows.length !== 1) throw new Error("Latest migration is missing. Run: npm run db:deploy");
   });
   await run("fonts", "Bangla fonts render correctly", async () => {

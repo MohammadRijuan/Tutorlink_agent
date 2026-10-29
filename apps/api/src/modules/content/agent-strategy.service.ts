@@ -1,3 +1,4 @@
+import { loadBusinessContext } from "../business/business.service.js";
 import { prisma } from "../../lib/prisma.js";
 import { CREATIVE_ANGLES, type CreativeAngle } from "./content.service.js";
 import { selectAudienceFromLeads } from "./agent-strategy.helpers.js";
@@ -99,15 +100,22 @@ export async function decideNextContent(guidance = ""): Promise<AgentContentDeci
     topClass && topClass[1] >= 2 ? `চট্টগ্রামে ${topClass[0]} শ্রেণির শিক্ষার্থীর জন্য টিউটর খোঁজার আগে যা জানাবেন` : null,
     topArea && topArea[1] >= 2 ? `চট্টগ্রামের ${topArea[0]} এলাকায় হোম টিউটর খোঁজার সময়সূচি ও প্রয়োজন কীভাবে মিলাবেন` : null,
   ].filter((value): value is string => Boolean(value));
-  const topicVariants = [...leadTopics, ...TOPIC_BANK].flatMap(base => [
-    base,
-    `${base} — অভিভাবকের চেকলিস্ট`,
-    `${base} — ৩ ধাপে করণীয়`,
-    `${base} — সাধারণ ভুল এড়ানোর উপায়`,
-    `${base} — বাস্তবসম্মত প্রশ্নোত্তর`,
-  ]);
+  // Topics grounded in the owner's real programs and facts (Settings -> Business facts), so posts talk about what TutorLink actually offers.
+  const business = await loadBusinessContext();
+  const area = business.serviceAreas[0] || "চট্টগ্রাম";
+  const profileTopics = [
+    ...business.supportedPrograms.flatMap(program => [`${program}: শিক্ষার্থীর জন্য সঠিক গৃহশিক্ষক বেছে নেওয়ার উপায়`, `${program}: সপ্তাহের পড়ার রুটিন কীভাবে সাজাবেন`]),
+    ...(business.trustedFacts.length ? [`${area}-এ অভিভাবকরা কীভাবে আমাদের মাধ্যমে উপযুক্ত গৃহশিক্ষক পেতে পারেন — ধাপে ধাপে`] : []),
+    `মেসেঞ্জারে কোন তথ্যগুলো জানালে দ্রুত উপযুক্ত শিক্ষক খোঁজা যায়: ক্লাস, বিষয়, এলাকা ও সময়`,
+  ];
+  const VARIANTS = ["", " — অভিভাবকের চেকলিস্ট", " — ৩ ধাপে করণীয়", " — সাধারণ ভুল এড়ানোর উপায়", " — বাস্তবসম্মত প্রশ্নোত্তর"];
+  const bases = [...leadTopics, ...profileTopics, ...TOPIC_BANK];
+  // Every base topic is used once (in a rotating order) before any variant of it appears again: no back-to-back repeats of one theme.
+  const topicVariants = VARIANTS.flatMap(variant => bases.map(base => `${base}${variant}`));
   const unseenTopics = topicVariants.filter(candidate => !recentTopics.has(candidate.toLocaleLowerCase()));
-  const topic = unseenTopics[0] || `${TOPIC_BANK[recent.length % TOPIC_BANK.length]} — নতুন দৃষ্টিভঙ্গি ${recent.length + 1}`;
+  const dayNumber = Math.floor(Date.now() / 86_400_000);
+  const pickable = unseenTopics.slice(0, Math.max(1, Math.min(unseenTopics.length, bases.length)));
+  const topic = pickable.length ? pickable[(dayNumber + recent.length) % pickable.length]! : `${TOPIC_BANK[recent.length % TOPIC_BANK.length]} — নতুন দৃষ্টিভঙ্গি ${recent.length + 1}`;
   const anglePool = CREATIVE_ANGLES.filter((angle): angle is Exclude<CreativeAngle, "AUTO"> => angle !== "AUTO");
   const recentAngles = recent.slice(0, 6).map(item => item.creativeAngle).filter((angle): angle is string => Boolean(angle));
   const angleStats = anglePool.map(angle => { const samples = measured(contentStats.filter(item => item.creativeAngle === angle)); return { angle, samples: samples.length, score: scoreOf(samples) }; });

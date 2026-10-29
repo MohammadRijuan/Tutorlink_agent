@@ -4,7 +4,12 @@
   "installCommand": "npm install",
   "buildCommand": "npm run vercel-build",
   "outputDirectory": "public",
-  "rewrites": [{ "source": "/(.*)", "destination": "/api" }],
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/api"
+    }
+  ],
   "functions": {
     "api/index.js": {
       "maxDuration": 300,
@@ -13,7 +18,16 @@
     }
   },
   "crons": [
-    { "path": "/api/cron/performance-monitor", "schedule": "0 3 * * *" },
-    { "path": "/api/cron/content-generation", "schedule": "30 3 * * *" }
+    {
+      "path": "/api/cron/performance-monitor",
+      "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/cron/content-generation",
+      "schedule": "30 3 * * *"
+    }
+  ],
+  "regions": [
+    "sin1"
   ]
 }

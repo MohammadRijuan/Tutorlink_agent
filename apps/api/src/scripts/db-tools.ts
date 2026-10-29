@@ -69,6 +69,7 @@ const MIGRATION_MARKERS: Array<{ name: string; test: (db: DbShape) => boolean; n
   { name: "20261021120000_meta_inbound_events", note: "MetaWebhookEvent table", test: db => db.tables.has("MetaWebhookEvent") },
   { name: "20261021130000_unique_media_views", note: "ContentMetric.uniqueMediaViews", test: db => db.columns.has("ContentMetric.uniqueMediaViews") },
   { name: "20261022090000_reel_scenes", note: "ContentItem.reelScenes", test: db => db.columns.has("ContentItem.reelScenes") },
+  { name: "20261025090000_design_subtitle_link_card", note: "ContentItem.linkAssetUrl", test: db => db.columns.has("ContentItem.linkAssetUrl") && db.columns.has("ContentItem.designPalette") },
 ];
 
 type DbShape = { tables: Set<string>; columns: Map<string, { type: string; nullable: boolean; udt: string }>; enums: Map<string, string[]>; indexes: Map<string, string[][]> };

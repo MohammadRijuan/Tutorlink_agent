@@ -5,7 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { api } from "@/components/workspace/api";
 import { Menu, Pause, Power, X, LogOut } from "lucide-react";
-import { send } from "@/components/workspace/api";
+import { bustCache, prefetch, send } from "@/components/workspace/api";
 import { allNavigation, systemNavigation, workspaceNavigation } from "@/lib/navigation";
 
 function NavigationGroup({ label, items, onNavigate }: { label: string; items: typeof allNavigation; onNavigate: () => void }) {
@@ -39,6 +39,11 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     const interval = window.setInterval(() => { void refresh(); }, 30000);
     return () => { active = false; window.clearInterval(interval); };
   }, []);
+  useEffect(() => {
+    // Warm the cache for the pages people open next, so every click after the first feels instant.
+    const timer = window.setTimeout(() => prefetch(["overview", "campaign/outlook", "content", "leads", "business-profile", "agent/guidance", "page/snapshots", "performance"]), 400);
+    return () => window.clearTimeout(timer);
+  }, []);
   async function toggleAgentMode() {
     if (!safetyStatus || toggling) return;
     setToggling(true); setToggleNote("");
@@ -60,7 +65,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const activeItem = allNavigation.find((item) => item.href === pathname) ?? allNavigation.find((item) => item.href !== "/" && pathname.startsWith(`${item.href}/`));
   async function logout() {
     setLoggingOut(true);
-    try { await fetch("/api/auth/logout", { method: "POST" }); } finally { router.replace("/login"); router.refresh(); }
+    try { bustCache(); await fetch("/api/auth/logout", { method: "POST" }); } finally { bustCache(); router.replace("/login"); router.refresh(); }
   }
   const closeMobile = () => setMobileOpen(false);
   return <div className="shell">
@@ -72,7 +77,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
       </Link><button className="mobile-close" onClick={closeMobile} aria-label="Close navigation"><X size={20}/></button></div>
       <NavigationGroup label="Workspace" items={workspaceNavigation} onNavigate={closeMobile}/>
       <NavigationGroup label="System" items={systemNavigation} onNavigate={closeMobile}/>
-      <div className="side-bottom">AUTONOMY CORE / 1.0.0<br/>Lead quality over vanity metrics.</div>
+      <div className="side-bottom">AUTONOMY CORE / 1.1.0<br/>Lead quality over vanity metrics.</div>
     </aside>
     <main className="workspace">
       <header className="topbar">

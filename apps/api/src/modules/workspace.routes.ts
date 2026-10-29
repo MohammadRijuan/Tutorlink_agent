@@ -15,6 +15,9 @@ import { runPublishChecks } from "./meta/publish-checks.js";
 import { buildFinalCaption } from "./meta/publishing.service.js";
 import { resolveReelFrameTexts } from "./meta/reel-frames.js";
 import { getAutomationState } from "./agent-control.service.js";
+import { buildAlerts } from "./dashboard-alerts.js";
+import { createContentNow, getCampaignOutlook } from "./content/automation.service.js";
+import { dataUrlToBuffer, svgToPng } from "./content/render.service.js";
 import { getPerformanceSummary, runPerformanceMonitor } from "./performance.service.js";
 import { durableJobSchemaAvailable, enqueueContentGeneration, getContentJob, listContentJobs, requestContentJobRetry } from "./jobs/jobs.service.js";
 import { classifyFailure } from "../lib/retry.js";
@@ -131,9 +134,32 @@ workspaceRouter.post("/performance/monitor", asyncRoute(async (_req, res) => {
 workspaceRouter.get("/content", asyncRoute(async (req, res) => {
   const status = typeof req.query.status === "string" ? req.query.status : undefined;
   const validStatuses = ["IDEA", "DRAFT", "VALIDATED", "SCHEDULED", "PUBLISHING", "PUBLISHED", "FAILED", "PAUSED"];
-  const data = await prisma.contentItem.findMany({ where: status && validStatuses.includes(status) ? { status: status as never } : undefined, orderBy: [{ scheduledAt: "asc" }, { createdAt: "desc" }], take: 30 });
+  const data = await prisma.contentItem.findMany({ where: status && validStatuses.includes(status) ? { status: status as never } : undefined, orderBy: [{ scheduledAt: "asc" }, { createdAt: "desc" }], take: 30, omit: { assetUrl: true, linkAssetUrl: true } });
   return res.json({ data });
 }));
+/** Banner/cover image as a real PNG so the browser can cache it and the JSON lists stay small. */
+workspaceRouter.get("/content/:id/asset.png", asyncRoute(async (req, res) => {
+  const content = await prisma.contentItem.findUnique({ where: { id: req.params.id }, select: { assetUrl: true, updatedAt: true } });
+  const source = content?.assetUrl ? dataUrlToBuffer(content.assetUrl) : null;
+  if (!source) return res.status(404).json({ error: { message: "This item has no image." } });
+  const png = await svgToPng(source);
+  res.set({ "Cache-Control": "private, max-age=3600", "Content-Disposition": req.query.download ? `attachment; filename="tutorlink-${req.params.id}.png"` : "inline" }).type("png").send(png);
+}));
+
+workspaceRouter.post("/content/create-now", asyncRoute(async (req, res) => {
+  const parsed = z.object({ format: z.enum(["AUTO", "POST", "REEL"]).default("AUTO"), topic: z.string().trim().max(200).optional(), guidance: z.string().trim().max(1800).optional(), publish: z.boolean().default(false) }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: { message: "Choose Post, Reel or Let the agent choose; the topic must be 200 characters or fewer." } });
+  try {
+    return res.status(201).json({ data: await createContentNow({ ...parsed.data, actor: req.adminUser?.email || "admin" }) });
+  } catch (error) {
+    if (error instanceof MetaApiError) return res.status(error.status).json({ error: { code: "CREATE_NOW_FAILED", message: error.message } });
+    const failure = classifyFailure(error);
+    return res.status(failure.category === "QUOTA_EXHAUSTED" ? 429 : 502).json({ error: { code: failure.category, message: failure.message } });
+  }
+}));
+
+workspaceRouter.get("/campaign/outlook", asyncRoute(async (_req, res) => res.json({ data: await getCampaignOutlook() })));
+
 workspaceRouter.get("/jobs", asyncRoute(async (req, res) => {
   const parsed = z.coerce.number().int().min(1).max(50).default(20).safeParse(req.query.limit);
   if (!parsed.success) return res.status(400).json({ error: { message: "Invalid job list limit." } });
@@ -192,7 +218,7 @@ workspaceRouter.post("/content/generate", asyncRoute(async (req, res) => {
           : 502;
       return res.status(status).json({ error: { code: failure.category, message: failure.message } });
     }
-    const { visualStyle, assetUrl } = await buildCreativeForDraft({ title: draft.title, caption: draft.caption, format: parsed.data.format, requestedStyle: parsed.data.visualStyle });
+    const { visualStyle, designPalette, assetUrl, linkAssetUrl } = await buildCreativeForDraft({ title: draft.title, subtitle: draft.subtitle, caption: draft.caption, format: parsed.data.format, requestedStyle: parsed.data.visualStyle });
     const content = await prisma.contentItem.create({
       data: {
         title: draft.title,
@@ -206,6 +232,7 @@ workspaceRouter.post("/content/generate", asyncRoute(async (req, res) => {
         callToAction: "মেসেঞ্জারে যোগাযোগ করুন",
         script: draft.script,
         reelScenes: draft.reelScenes ? asJson(draft.reelScenes) : undefined,
+        subtitle: draft.subtitle, designPalette, linkAssetUrl,
         assetUrl,
         status: "DRAFT",
       },
@@ -261,8 +288,8 @@ workspaceRouter.post("/content/agent-generate", asyncRoute(async (req, res) => {
       : ["CONFIGURATION", "AUTHENTICATION", "PERMISSION_DENIED"].includes(failure.category) ? 503 : 502;
     return res.status(status).json({ error: { code: failure.category, message: failure.message } });
   }
-  const { visualStyle, assetUrl } = await buildCreativeForDraft({ title: draft.title, caption: draft.caption, format: input.format });
-  const content = await prisma.contentItem.create({ data: { title: draft.title, format: input.format, topic: input.topic, creativeAngle: input.creativeAngle, visualStyle, language: "bn", caption: draft.caption, hashtags: asJson(draft.hashtags), callToAction: "মেসেঞ্জারে যোগাযোগ করুন", script: draft.script, reelScenes: draft.reelScenes ? asJson(draft.reelScenes) : undefined, assetUrl, status: "DRAFT" } });
+  const { visualStyle, designPalette, assetUrl, linkAssetUrl } = await buildCreativeForDraft({ title: draft.title, subtitle: draft.subtitle, caption: draft.caption, format: input.format });
+  const content = await prisma.contentItem.create({ data: { title: draft.title, format: input.format, topic: input.topic, creativeAngle: input.creativeAngle, visualStyle, language: "bn", caption: draft.caption, hashtags: asJson(draft.hashtags), callToAction: "মেসেঞ্জারে যোগাযোগ করুন", script: draft.script, reelScenes: draft.reelScenes ? asJson(draft.reelScenes) : undefined, subtitle: draft.subtitle, designPalette, linkAssetUrl, assetUrl, status: "DRAFT" } });
   await prisma.agentDecision.create({ data: { runId, category: "CONTENT_SELECTION", observation: asJson(decision.observation), hypothesis: decision.rationale.slice(0, 1000), confidence: decision.confidence, action: asJson({ contentId: content.id, topic: decision.topic, format: decision.format, creativeAngle: decision.creativeAngle, visualStyle, guidance: parsed.data.guidance || null, published: false }) } });
   await prisma.auditEvent.create({ data: { actor, action: "AGENT_CONTENT_SELECTED", entityType: "ContentItem", entityId: content.id, details: asJson({ topic: decision.topic, format: decision.format, creativeAngle: decision.creativeAngle, confidence: decision.confidence, provider: draft.provider, model: draft.model }) } });
   return res.status(201).json({ data: content, decision: { topic: decision.topic, format: decision.format, creativeAngle: decision.creativeAngle, visualStyle, rationale: decision.rationale, confidence: decision.confidence, observation: decision.observation }, mode: "synchronous", publishing: "disabled", generation: { provider: draft.provider, model: draft.model, warning: "Draft saved; nothing was published. Generation is synchronous in Content Studio so it can run on Vercel Hobby without a frequent worker cron." } });
@@ -290,7 +317,7 @@ workspaceRouter.get("/content/:id/checks", asyncRoute(async (req, res) => {
   if (!content) return res.status(404).json({ error: { message: "Content item was not found." } });
   const readiness = await runPublishChecks(content);
   let finalCaption: string | null = null;
-  try { finalCaption = buildFinalCaption(content.caption, content.id); } catch { /* Messenger URL not configured: reported by the checks. */ }
+  try { finalCaption = buildFinalCaption(content.caption, content.id, { hashtags: content.hashtags, includeLink: content.format === "REEL" }); } catch { /* Messenger URL not configured: reported by the checks. */ }
   return res.json({ data: { ...readiness, finalCaption, reelFrames: content.format === "REEL" ? resolveReelFrameTexts(content) : null, publishMode: env.META_PUBLISH_MODE } });
 }));
 workspaceRouter.post("/content/:id/resolve-publishing", asyncRoute(async (req, res) => {
@@ -385,7 +412,7 @@ workspaceRouter.get("/learning", asyncRoute(async (_req, res) => {
   const [decisions, experiments, audit] = await Promise.all([
     prisma.agentDecision.findMany({ orderBy: { createdAt: "desc" }, take: 50 }),
     prisma.campaignExperiment.findMany({ orderBy: { updatedAt: "desc" }, take: 20 }),
-    prisma.auditEvent.findMany({ where: { action: { in: ["CONTENT_DRAFT_GENERATED", "LEAD_CREATED", "LEAD_UPDATED", "SAFETY_SETTINGS_UPDATED"] } }, orderBy: { createdAt: "desc" }, take: 30, select: { id: true, actor: true, action: true, entityType: true, entityId: true, details: true, createdAt: true } }),
+    prisma.auditEvent.findMany({ where: { action: { in: ["FACEBOOK_CONTENT_PUBLISHED", "FACEBOOK_CONTENT_PUBLISH_FAILED", "AUTOMATION_AUTO_PAUSED", "AUTONOMOUS_CONTENT_CREATED", "CONTENT_CREATED_NOW", "PUBLISH_STATE_RESOLVED_BY_HUMAN", "CONTENT_DRAFT_GENERATED", "LEAD_CREATED", "LEAD_UPDATED", "SAFETY_SETTINGS_UPDATED", "BUSINESS_PROFILE_UPDATED"] } }, orderBy: { createdAt: "desc" }, take: 30, select: { id: true, actor: true, action: true, entityType: true, entityId: true, details: true, createdAt: true } }),
   ]);
   return res.json({ decisions, experiments, audit });
 }));
@@ -406,5 +433,6 @@ workspaceRouter.get("/overview", asyncRoute(async (_req, res) => {
   const paused = values.globalAutomationPaused !== false;
   const summary = recentSnapshot?.rawSummary as { page?: { name?: string }; coverage?: { postCount?: number; insightsAvailable?: number }; posts?: Array<{ insights?: Record<string, unknown> }> } | null;
   const numericMetric = (key: string) => { const values = (summary?.posts || []).map(post => post.insights?.[key]).map(value => typeof value === "number" ? value : typeof value === "string" && value.trim() !== "" && Number.isFinite(Number(value)) ? Number(value) : null).filter((value): value is number => value !== null); return values.length ? values.reduce((sum, value) => sum + value, 0) : null; };
-  return res.json({ qualifiedLeads, bookings, pageName: summary?.page?.name ?? null, postCount: summary?.coverage?.postCount ?? null, insightsAvailable: summary?.coverage?.insightsAvailable ?? null, totalUniqueMediaViews: numericMetric("post_total_media_view_unique"), totalViews: numericMetric("post_media_view"), lastAnalyzedAt: recentSnapshot?.fetchedAt ?? null, drafts, scheduled, globalAutomationPaused: paused, agentMode: !paused && values.agentMode === true, publishMode: env.META_PUBLISH_MODE });
+  const alerts = await buildAlerts((summary as { gaps?: Array<{ area: string; message: string; fix: string }> } | null)?.gaps ?? []);
+  return res.json({ alerts, qualifiedLeads, bookings, pageName: summary?.page?.name ?? null, postCount: summary?.coverage?.postCount ?? null, insightsAvailable: summary?.coverage?.insightsAvailable ?? null, totalUniqueMediaViews: numericMetric("post_total_media_view_unique"), totalViews: numericMetric("post_media_view"), lastAnalyzedAt: recentSnapshot?.fetchedAt ?? null, drafts, scheduled, globalAutomationPaused: paused, agentMode: !paused && values.agentMode === true, publishMode: env.META_PUBLISH_MODE });
 }));

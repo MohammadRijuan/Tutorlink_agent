@@ -5,12 +5,13 @@ import { spawn } from "node:child_process";
 import { prisma } from "../../lib/prisma.js";
 import { env } from "../../config/env.js";
 import { ffmpegBinary } from "../../lib/ffmpeg.js";
-import { ensureRequiredBranding } from "../content/safety.rules.js";
-import { createBrandedAsset, resolveVisualStyle } from "../content/asset.service.js";
+import { ensureRequiredBranding, REQUIRED_HASHTAG } from "../content/safety.rules.js";
+import { chooseDesign, createBrandedAsset } from "../content/asset.service.js";
+import { publicBaseUrl } from "../share.routes.js";
 import { dataUrlToBuffer, svgToPng } from "../content/render.service.js";
 import { AUTONOMOUS_ACTORS, autoPause, automationActive, getAutomationState } from "../agent-control.service.js";
 import { MetaApiError, sanitizeMetaErrorMessage } from "./meta.service.js";
-import { messengerUrlFor } from "./messenger-link.js";
+import { messengerBaseUrl, messengerUrlFor } from "./messenger-link.js";
 import { runPublishChecks } from "./publish-checks.js";
 import { reelFrameSvg, resolveReelFrameTexts } from "./reel-frames.js";
 
@@ -25,11 +26,26 @@ export class AmbiguousPublishError extends MetaApiError {
 type PublishableContent = {
   id: string; title: string; format: string; topic: string; caption: string; hashtags: unknown;
   script: string | null; reelScenes: unknown; assetUrl: string | null; visualStyle: string | null; status: string; platformPostId: string | null;
-  creativeAngle: string | null;
+  creativeAngle: string | null; subtitle: string | null; designPalette: string | null; linkAssetUrl: string | null;
 };
 
-export function buildFinalCaption(caption: string, contentId: string) {
-  return `${ensureRequiredBranding(caption)}\n\n💬 সরাসরি মেসেঞ্জারে কথা বলুন: ${messengerUrlFor(contentId)}`;
+const HASHTAG_LINE = /^\s*(?:#[\p{L}\p{M}\p{N}_]+\s*)+$/u;
+
+/** Puts the required hashtag first, then the agent's extra hashtags, on one final line. */
+export function withHashtags(text: string, hashtags: unknown): string {
+  const extra = Array.isArray(hashtags) ? hashtags.filter((tag): tag is string => typeof tag === "string" && /^#[\p{L}\p{M}\p{N}_]+$/u.test(tag) && tag !== REQUIRED_HASHTAG) : [];
+  const lines = text.trimEnd().split("\n");
+  while (lines.length > 0 && HASHTAG_LINE.test(lines[lines.length - 1]!)) lines.pop();
+  return `${lines.join("\n").trimEnd()}\n\n${[REQUIRED_HASHTAG, ...extra].slice(0, 6).join(" ")}`;
+}
+
+/**
+ * The exact text posted. Link-card posts carry the native Send Message button instead of a raw link in the text;
+ * photo and Reel posts keep a clickable Messenger link.
+ */
+export function buildFinalCaption(caption: string, contentId: string, options: { hashtags?: unknown; includeLink?: boolean } = {}) {
+  const body = withHashtags(ensureRequiredBranding(caption), options.hashtags);
+  return options.includeLink === false ? body : `${body}\n\n💬 সরাসরি মেসেঞ্জারে কথা বলুন: ${messengerUrlFor(contentId)}`;
 }
 
 const SCENE_SECONDS = 3.4;
@@ -52,7 +68,7 @@ function runFfmpeg(binary: string, args: string[]) {
 }
 
 /** Renders a real 1080x1920 H.264 + AAC MP4 (hook, scenes, contact end card) with soft fades between scenes. */
-export async function renderReel(content: Pick<PublishableContent, "title" | "script" | "reelScenes">) {
+export async function renderReel(content: Pick<PublishableContent, "title" | "script" | "reelScenes"> & { designPalette?: string | null }) {
   const dir = await mkdtemp(join(tmpdir(), "tutorlink-reel-"));
   try {
     const texts = resolveReelFrameTexts(content);
@@ -60,7 +76,7 @@ export async function renderReel(content: Pick<PublishableContent, "title" | "sc
     const durations: number[] = [];
     for (let i = 0; i < texts.length; i++) {
       const framePath = join(dir, `frame-${i}.png`);
-      await writeFile(framePath, await svgToPng(await reelFrameSvg(texts[i]!, i, texts.length)));
+      await writeFile(framePath, await svgToPng(await reelFrameSvg(texts[i]!, i, texts.length, content.designPalette)));
       frames.push(framePath);
       durations.push(i === texts.length - 1 ? END_CARD_SECONDS : SCENE_SECONDS);
     }
@@ -104,6 +120,55 @@ async function graphPost(path: string, fields: Record<string, string>, timeoutMs
   return payload;
 }
 
+type PublishResult = { postId: string; mediaId: string | null; mediaType: string; processing: string | null; ctaButton?: boolean | null };
+
+/**
+ * Link-card post with Meta's native "Send Message" call-to-action button.
+ * Only a clean rejection by Meta (nothing was created) falls back to a photo post; an unclear outcome is treated as ambiguous.
+ */
+async function tryLinkCtaPost(content: PublishableContent): Promise<{ result: PublishResult } | { reason: string }> {
+  if (env.META_POST_STYLE === "photo") return { reason: "disabled-by-setting" };
+  const base = publicBaseUrl();
+  if (!base) return { reason: "no-public-api-url" };
+  if (!content.linkAssetUrl) return { reason: "no-link-image" };
+  const shareUrl = `${base}/s/${content.id}`;
+  try {
+    const probe = await fetch(`${shareUrl}/image.png`, { signal: AbortSignal.timeout(20_000) });
+    if (!probe.ok || !(probe.headers.get("content-type") || "").includes("image/png")) return { reason: `share-image-http-${probe.status}` };
+  } catch { return { reason: "share-image-unreachable" }; }
+
+  const message = buildFinalCaption(content.caption, content.id, { hashtags: content.hashtags, includeLink: false });
+  const targets = [...new Set([messengerUrlFor(content.id), messengerBaseUrl().toString()])];
+  let lastReason = "meta-rejected-call-to-action";
+  for (const target of targets) {
+    let response: Response;
+    try {
+      response = await fetch(`https://graph.facebook.com/${env.META_GRAPH_VERSION}/${env.META_PAGE_ID}/feed`, {
+        method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ message, link: shareUrl, published: "true", call_to_action: JSON.stringify({ type: "MESSAGE_PAGE", value: { link: target } }), access_token: env.META_PAGE_ACCESS_TOKEN }),
+        signal: AbortSignal.timeout(25_000),
+      });
+    } catch { throw new AmbiguousPublishError("The link post did not return a response. It may or may not be live; check the Facebook Page before resuming automation."); }
+    const payload = await response.json().catch(() => ({})) as GraphPayload;
+    if (response.ok && !payload.error && payload.id) {
+      let ctaButton: boolean | null = null;
+      try {
+        const check = await fetch(`https://graph.facebook.com/${env.META_GRAPH_VERSION}/${payload.id}?fields=call_to_action&access_token=${encodeURIComponent(env.META_PAGE_ACCESS_TOKEN)}`, { signal: AbortSignal.timeout(8000), cache: "no-store" });
+        const info = await check.json().catch(() => ({})) as { call_to_action?: unknown; error?: unknown };
+        ctaButton = check.ok && !info.error ? Boolean(info.call_to_action) : null;
+      } catch { /* informational only */ }
+      return { result: { postId: payload.id, mediaId: null, mediaType: "LINK_CTA", processing: null, ctaButton } };
+    }
+    if (response.status >= 500) throw new AmbiguousPublishError("Meta returned a server error while publishing the link post. It may or may not be live; check the Facebook Page before resuming automation.");
+    const code = payload.error?.code;
+    // Only an invalid/expired token is a hard stop here; other rejections (including unsupported call_to_action) fall back to a photo post, which then reports any real permission problem itself.
+    if (code === 190 || code === 368 || response.status === 401) throw metaFailure("feed", response.status, payload.error);
+    console.error(JSON.stringify({ event: "meta_link_cta_rejected", httpStatus: response.status, code: code ?? null, subcode: payload.error?.error_subcode ?? null, message: sanitizeMetaErrorMessage(payload.error?.message || "", env.META_PAGE_ACCESS_TOKEN) }));
+    lastReason = `meta-${code ?? response.status}`;
+  }
+  return { reason: lastReason };
+}
+
 async function publishPhoto(content: PublishableContent, caption: string) {
   const source = content.assetUrl ? dataUrlToBuffer(content.assetUrl) : null;
   if (!source) throw new MetaApiError("A branded banner is required before publishing a feed post.", 400);
@@ -121,7 +186,7 @@ async function publishPhoto(content: PublishableContent, caption: string) {
     if (response.status >= 500) throw new AmbiguousPublishError("Meta returned a server error while publishing the photo. It may or may not be live; check the Facebook Page before resuming automation.");
     throw metaFailure("photos", response.status, payload.error);
   }
-  return { postId: payload.post_id || payload.id!, mediaId: payload.id || null, mediaType: "PHOTO", processing: null as string | null };
+  return { postId: payload.post_id || payload.id!, mediaId: payload.id || null, mediaType: "PHOTO", processing: null as string | null } as PublishResult;
 }
 
 async function reelStatus(videoId: string): Promise<{ state: "ready" | "processing" | "error"; detail: string | null }> {
@@ -197,10 +262,11 @@ export async function publishContentItem(contentId: string, actor = "autonomous-
     throw new MetaApiError("Another worker already claimed this content. It was not published twice.", 409);
   }
   try {
-    const caption = buildFinalCaption(content.caption, content.id);
+    const caption = buildFinalCaption(content.caption, content.id, { hashtags: content.hashtags });
     let effectiveFormat = content.format;
     let fallbackFrom: string | null = null;
-    let result: { postId: string; mediaId: string | null; mediaType: string; processing: string | null };
+    let ctaFallback: string | null = null;
+    let result: PublishResult;
     if (content.format === "REEL") {
       try {
         result = await publishReel(content, caption);
@@ -208,24 +274,29 @@ export async function publishContentItem(contentId: string, actor = "autonomous-
         // Only fall back when rendering failed before any Meta upload began. Never fall back after an ambiguous Meta response.
         if (!(error instanceof ReelRenderError)) throw error;
         const snapshot = await prisma.pageSnapshot.findFirst({ orderBy: { fetchedAt: "desc" }, select: { pageName: true, profilePicture: true } });
-        const fallbackStyle = resolveVisualStyle("AUTO", `${content.title}:${content.id}`);
-        const squareAsset = await createBrandedAsset({ title: content.title, pageName: snapshot?.pageName || "TutorLink Tuition Media", profilePicture: snapshot?.profilePicture || null, format: "POST", visualStyle: fallbackStyle });
-        const fallback: PublishableContent = { ...content, format: "POST", assetUrl: squareAsset, script: null, visualStyle: fallbackStyle };
+        const design = chooseDesign(`${content.title}:${content.id}`, [{ visualStyle: content.visualStyle, designPalette: content.designPalette }]);
+        const fallbackStyle = design.style;
+        const common = { title: content.title, subtitle: content.subtitle, pageName: snapshot?.pageName || "TutorLink Tuition Media", profilePicture: snapshot?.profilePicture || null, visualStyle: design.style, palette: design.palette };
+        const squareAsset = await createBrandedAsset({ ...common, format: "POST" });
+        const wideAsset = await createBrandedAsset({ ...common, format: "LINK" });
+        const fallback: PublishableContent = { ...content, format: "POST", assetUrl: squareAsset, linkAssetUrl: wideAsset, script: null, visualStyle: fallbackStyle, designPalette: design.palette };
         const fallbackChecks = await runPublishChecks(fallback);
         if (!fallbackChecks.ok) throw new MetaApiError("The Reel could not be rendered and the photo fallback failed validation. Nothing was published.", 400);
-        await prisma.contentItem.update({ where: { id: content.id }, data: { format: "POST", assetUrl: squareAsset, script: null, visualStyle: fallbackStyle } });
+        await prisma.contentItem.update({ where: { id: content.id }, data: { format: "POST", assetUrl: squareAsset, linkAssetUrl: wideAsset, script: null, visualStyle: fallbackStyle, designPalette: design.palette } });
         effectiveFormat = "POST";
         fallbackFrom = "REEL_RENDER_FAILED";
         result = await publishPhoto(fallback, caption);
       }
     } else {
-      result = await publishPhoto(content, caption);
+      const linked = await tryLinkCtaPost(content);
+      if ("result" in linked) result = linked.result;
+      else { ctaFallback = linked.reason; result = await publishPhoto(content, caption); }
     }
     const updated = await prisma.contentItem.update({ where: { id: content.id }, data: { status: "PUBLISHED", format: effectiveFormat, platformPostId: result.postId, publishedAt: new Date(), scheduledAt: null } });
     const variables: Array<[string, string | null]> = [["format", effectiveFormat], ["creativeAngle", content.creativeAngle], ["visualStyle", content.visualStyle]];
     await prisma.experiment.createMany({ data: variables.filter((pair): pair is [string, string] => Boolean(pair[1])).map(([experimentKey, variant]) => ({ contentItemId: content.id, experimentKey, variant })) }).catch(() => undefined);
-    await prisma.auditEvent.create({ data: { actor, action: "FACEBOOK_CONTENT_PUBLISHED", entityType: "ContentItem", entityId: content.id, details: { postId: result.postId, mediaId: result.mediaId, mediaType: result.mediaType, processing: result.processing, fallbackFrom, publishedAt: updated.publishedAt } as never } });
-    return { published: true, duplicate: false, contentId: content.id, postId: result.postId, mediaId: result.mediaId, mediaType: result.mediaType, format: effectiveFormat, fallbackFrom, publishedAt: updated.publishedAt };
+    await prisma.auditEvent.create({ data: { actor, action: "FACEBOOK_CONTENT_PUBLISHED", entityType: "ContentItem", entityId: content.id, details: { postId: result.postId, mediaId: result.mediaId, mediaType: result.mediaType, processing: result.processing, fallbackFrom, ctaButton: result.ctaButton ?? null, ctaFallback, publishedAt: updated.publishedAt } as never } });
+    return { published: true, duplicate: false, contentId: content.id, postId: result.postId, mediaId: result.mediaId, mediaType: result.mediaType, format: effectiveFormat, fallbackFrom, ctaButton: result.ctaButton ?? null, ctaFallback, publishedAt: updated.publishedAt };
   } catch (error) {
     const ambiguous = error instanceof AmbiguousPublishError;
     await prisma.contentItem.updateMany({ where: { id: content.id, status: "PUBLISHING", platformPostId: null }, data: { status: "FAILED", scheduledAt: null } }).catch(() => undefined);

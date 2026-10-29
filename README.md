@@ -14,8 +14,9 @@ Everything runs on free tiers: Vercel Hobby, Neon Postgres, Google Gemini (free)
 ## Start here
 1. **Deploy:** follow [`docs/PRODUCTION_DEPLOYMENT.md`](docs/PRODUCTION_DEPLOYMENT.md) (about 45 minutes, in order).
 2. **Database trouble / old migration history:** [`docs/DATABASE_MIGRATION.md`](docs/DATABASE_MIGRATION.md).
-3. **Which AI model and why:** [`docs/AI_MODELS.md`](docs/AI_MODELS.md).
-4. **Every requirement vs. what is implemented and how it was verified:** [`docs/REQUIREMENTS_CHECKLIST.md`](docs/REQUIREMENTS_CHECKLIST.md).
+3. **How the agent works, what it does when something fails or no leads come, and what you do:** [`docs/AGENT_PLAYBOOK.md`](docs/AGENT_PLAYBOOK.md).
+4. **Which AI model and why:** [`docs/AI_MODELS.md`](docs/AI_MODELS.md).
+5. **Every requirement vs. what is implemented and how it was verified:** [`docs/REQUIREMENTS_CHECKLIST.md`](docs/REQUIREMENTS_CHECKLIST.md).
 
 ## Local development
 ```bash
@@ -26,7 +27,7 @@ npm run db:generate
 npm run db:setup                              # preflight -> migrate deploy -> verify (empty database only)
 npm run admin:create                          # uses ADMIN_EMAIL / ADMIN_PASSWORD from apps/api/.env
 npm run dev                                   # API :4000, dashboard :3000
-npm test                                      # 49 unit tests
+npm test                                      # unit tests
 ```
 Keep `META_PUBLISH_MODE=dry-run` until the staging checklist in the deployment guide passes.
 

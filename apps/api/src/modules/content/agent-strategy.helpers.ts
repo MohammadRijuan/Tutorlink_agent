@@ -1,5 +1,5 @@
 export function selectAudienceFromLeads(records: Array<{ classLevel?: string | null; serviceArea?: string | null; subjects?: unknown }>) {
-  const cleanSegment = (value: unknown) => typeof value === "string" ? value.replace(/[^\p{L}\p{N}\s-]/gu, " ").replace(/\s+/g, " ").trim().slice(0, 50) : "";
+  const cleanSegment = (value: unknown) => typeof value === "string" ? value.replace(/[^\p{L}\p{M}\p{N}\s-]/gu, " ").replace(/\s+/g, " ").trim().slice(0, 50) : "";
   const mostCommon = (values: string[]) => {
     const counts = new Map<string, number>();
     for (const raw of values) { const value = cleanSegment(raw); if (value.length >= 2) counts.set(value, (counts.get(value) || 0) + 1); }
