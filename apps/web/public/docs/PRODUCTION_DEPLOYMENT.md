@@ -41,6 +41,7 @@ Do the steps **in order**. Total time: about 45 minutes. Nothing here enables bi
 | `META_MESSENGER_URL` | `https://m.me/<your-page-username>` |
 | `PUBLIC_API_URL` | this API project's own https address, e.g. `https://tutorlink-agent-api.vercel.app` (enables the native **Send Message** button) |
 | `META_PUBLISH_MODE` | `dry-run` (switch to `live` only in step 6) |
+| `PEXELS_API_KEY` | optional but recommended: a FREE key from pexels.com/api, gives Reel scenes real photos |
 
 4. Deploy. Open `https://<api>.vercel.app/health`; it must return `{"status":"ok"...}`.
 5. If Vercel rejects `maxDuration: 300` (older Hobby projects without Fluid Compute), edit `apps/api/vercel.json` and set it to `60`; Reels are then likelier to time out, so enable Fluid Compute in Project Settings instead if you can.
@@ -54,6 +55,7 @@ Do the steps **in order**. Total time: about 45 minutes. Nothing here enables bi
 ## 4. Verify the deployment (dashboard → Settings)
 1. **Deployment self-check → Run checks.** Every line must be green: database + schema, **Bangla fonts**, **FFmpeg**, Messenger URL, Meta credentials, webhook secrets, AI key.
 2. **Free AI health → Test every model.** At least one content model and one classifier model must say *Working* with Bangla output *Yes*.
+2b. **Reel voice-over and video → Listen to a sample** for a few voices, pick the one you like and press *Use this voice*. The panel also shows whether photo scenes are active.
 3. **Business facts the agent may use:** enter your real service areas, programs and any extra phrases to forbid. The agent states only facts you list here.
 
 ## 5. Meta webhook (lead capture)
@@ -71,9 +73,9 @@ Stay in `dry-run` until each line passes.
 1. Message the Page from a tester account → a **NEW** lead appears in *Qualified leads* (enquiry text visible, label correctable).
 2. Content Studio → **Let the agent decide** (dry-run): a preview is saved. Click **Review publish checks**: all green, exact caption shown.
 3. In the API project set `META_PUBLISH_MODE=live`, redeploy. Publish one **feed post** manually with the draft's *Publish to Facebook* button. Check the Page: image readable, phone and CTA visible, link opens Messenger.
-4. Run again until the agent produces a **Reel**; publish it manually. Check it plays and the end card shows the number.
+4. Use **Create now → Reel** to make a Reel, press **Watch preview with voice** and listen, then publish it manually. Check it plays and the end card shows the number.
 5. Click the caption link from a tester account and send a message → the lead shows "Attributed to a post".
-6. Only now switch **Agent Mode ON** (top bar). Vercel Cron then runs daily: 03:00 UTC performance import, 03:30 UTC (09:30 Bangladesh time) campaign. The agent may wait instead of posting.
+6. Only now switch **Agent Mode ON** (top bar). Vercel Cron then runs the campaign **twice a day**: 03:30 UTC (9:30 AM Bangladesh time) and 13:30 UTC (7:30 PM). Each run refreshes your Page statistics first. The agent may wait instead of posting.
 
 ## 7. Speed (make the dashboard feel instant)
 * **Region:** both projects are pinned to Singapore (`sin1`) in `vercel.json`. Create your Neon project in **AWS Singapore (ap-southeast-1)** so the function and the database are next to each other and close to Bangladesh. A US region adds ~200 ms to every database call.
@@ -81,7 +83,7 @@ Stay in `dry-run` until each line passes.
 * **Cold starts:** a free Vercel function sleeps when unused and Neon's free database sleeps after ~5 idle minutes. To keep the **function** warm, add a free pinger (UptimeRobot or cron-job.org) on `https://<api>.vercel.app/health` every 5 minutes. Do **not** point a 24/7 pinger at `/health/warm`: that wakes the database and can use up Neon's monthly free compute allowance; check your Neon plan before using it, and only during limited hours.
 
 ## 8. Vercel Hobby notes
-* Hobby allows daily crons only (that is why there are two). Hobby is for **non-commercial** use under Vercel's terms; a business page should move to Vercel Pro ($20/month) or another host when you can. The code has no Vercel-specific lock-in apart from `vercel.json`.
+* Hobby allows daily crons only (that is why the campaign uses two entries: morning and evening). Hobby is for **non-commercial** use under Vercel's terms; a business page should move to Vercel Pro ($20/month) or another host when you can. The code has no Vercel-specific lock-in apart from `vercel.json`.
 * Free AI quotas are set by Google/Groq per account and can change; the app degrades by skipping runs, never by spending money.
 
 ## 9. Troubleshooting

@@ -24,3 +24,11 @@ Change the order or models with `AI_CONTENT_CHAIN` / `AI_CLASSIFIER_CHAIN` (`pro
 
 ## Verify on your own keys
 Dashboard → **Settings → Free AI health → Test every model** sends one tiny Bangla request per model and shows which work, their speed, and whether the output was Bangla. Free-tier quotas are set by Google/Groq per account and change; check your own limits in AI Studio / the Groq console.
+
+## Voice-over, proofreading and instruction checking (added in 1.2)
+| Task | Model | Notes |
+|---|---|---|
+| Reel voice-over | Gemini text-to-speech (`gemini-2.5-flash-preview-tts`, then `gemini-3.1-flash-tts-preview`, then `gemini-2.5-flash-lite-preview-tts`) with 13 selectable voices | Same free key. Bangla (bn-BD) is a supported language. Free-tier voice quota is small and can change; the daily budget is `TTS_DAILY_LIMIT`. Listen to a sample in Settings before relying on it. |
+| Bangla proofreading + instruction check | The content chain (Gemini first) in a separate request | Corrects only; large rewrites are rejected. |
+| Understanding your instructions | The content chain | Produces the rules shown back to you. |
+Per piece of content the agent now uses about 2 text requests (write + proofread) plus 1-2 voice requests for a Reel, well inside the default free budgets.

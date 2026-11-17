@@ -86,6 +86,12 @@ model ContentItem {
   subtitle         String?
   designPalette    String?
   linkAssetUrl     String?
+  narration        String?
+  reelPlan         Json?
+  voiceAudio       Bytes?
+  voiceSeconds     Float?
+  voicePauses      Json?
+  voiceName        String?
   status           ContentStatus @default(IDEA)
   scheduledAt      DateTime?
   publishedAt      DateTime?

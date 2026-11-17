@@ -4,10 +4,10 @@ import { env } from "../../config/env.js";
 import { classifyFailure } from "../../lib/retry.js";
 import { generateDraft } from "./content.service.js";
 import { decideNextContent } from "./agent-strategy.service.js";
-import { buildCreativeForDraft } from "./creative.service.js";
+import { buildCreativeForDraft, draftColumns } from "./creative.service.js";
+import { ttsConfigured, VoiceUnavailableError } from "../video/tts.service.js";
 import { assertAiBudget } from "../ai/ai.service.js";
 import { evaluateCadence, forecastFirstPost } from "./cadence.js";
-import { buildCreativeForDraft as buildCreative } from "./creative.service.js";
 import { automationActive, getAutomationState } from "../agent-control.service.js";
 import { publishContentItem, publishDueScheduledContent } from "../meta/publishing.service.js";
 import { messengerBaseUrl } from "../meta/messenger-link.js";
@@ -71,10 +71,12 @@ export async function runAutonomousCampaign(now = new Date(), guidanceOverride?:
   const decision = await decideNextContent(guidance);
   const recent = await prisma.contentItem.findMany({ orderBy: { createdAt: "desc" }, take: 40, select: { title: true, topic: true, format: true, caption: true, creativeAngle: true } });
 
+  // A Reel needs a voice-over; if voice cannot be produced today the agent chooses a feed post instead of a silent video.
+  let finalFormat: "POST" | "REEL" = decision.format === "REEL" && !ttsConfigured() && env.REEL_REQUIRE_VOICE === "true" ? "POST" : decision.format;
   let draft;
   try {
     draft = await generateDraft({
-      topic: decision.topic, format: decision.format, audience: decision.audience, goal: decision.goal,
+      topic: decision.topic, format: finalFormat, reelStyle: decision.reelStyle, audience: decision.audience, goal: decision.goal,
       creativeAngle: decision.creativeAngle, visualStyle: "AUTO", guidance, avoidRecent: recent,
     });
   } catch (error) {
@@ -84,11 +86,20 @@ export async function runAutonomousCampaign(now = new Date(), guidanceOverride?:
     throw error;
   }
 
-  const { visualStyle, designPalette, assetUrl, linkAssetUrl } = await buildCreativeForDraft({ title: draft.title, subtitle: draft.subtitle, caption: draft.caption, format: decision.format });
+  let creative: Awaited<ReturnType<typeof buildCreativeForDraft>>;
+  let voiceFallback: string | null = null;
+  try { creative = await buildCreativeForDraft({ title: draft.title, subtitle: draft.subtitle, caption: draft.caption, format: finalFormat, draft }); }
+  catch (error) {
+    if (finalFormat !== "REEL" || !(error instanceof VoiceUnavailableError)) throw error;
+    // No voice-over means no Reel: publish a feed post today instead of a silent video.
+    voiceFallback = error.message;
+    finalFormat = "POST";
+    draft = await generateDraft({ topic: decision.topic, format: "POST", audience: decision.audience, goal: decision.goal, creativeAngle: decision.creativeAngle, visualStyle: "AUTO", guidance, avoidRecent: recent });
+    creative = await buildCreativeForDraft({ title: draft.title, subtitle: draft.subtitle, caption: draft.caption, format: "POST", draft });
+  }
+  const visualStyle = creative.visualStyle;
   const content = await prisma.contentItem.create({ data: {
-    title: draft.title, format: decision.format, topic: decision.topic, creativeAngle: decision.creativeAngle,
-    visualStyle, designPalette, subtitle: draft.subtitle, language: "bn", caption: draft.caption, hashtags: asJson(draft.hashtags), callToAction: "মেসেঞ্জারে যোগাযোগ করুন",
-    script: draft.script, reelScenes: draft.reelScenes ? asJson(draft.reelScenes) : undefined, assetUrl, linkAssetUrl, status: "DRAFT",
+    ...draftColumns(draft, creative), format: finalFormat, topic: decision.topic, creativeAngle: decision.creativeAngle, status: "DRAFT",
   } });
   const runId = `autonomous-campaign-${now.toISOString().slice(0, 10)}-${content.id}`;
   const fallbackFrom = "fallbackFrom" in draft ? draft.fallbackFrom || null : null;
@@ -96,7 +107,7 @@ export async function runAutonomousCampaign(now = new Date(), guidanceOverride?:
     runId, category: "AUTONOMOUS_CONTENT_AND_PUBLISH",
     observation: asJson({ ...decision.observation, qualifiedLeadsLast7Days: qualified, bookedLeadsLast7Days: booked, hoursSinceLastPost, publishedLast7Days: publishedThisWeek, lastPostUniqueMediaViews: recentReach, lastPostEngagement: recentEngagement }),
     hypothesis: decision.rationale.slice(0, 1000), confidence: decision.confidence,
-    action: asJson({ contentId: content.id, topic: decision.topic, format: decision.format, creativeAngle: decision.creativeAngle, visualStyle, published: false, guidanceApplied: Boolean(guidance) }),
+    action: asJson({ contentId: content.id, topic: decision.topic, format: finalFormat, reelStyle: finalFormat === "REEL" ? decision.reelStyle : null, voiceFallback, creativeAngle: decision.creativeAngle, visualStyle, published: false, guidanceApplied: Boolean(guidance) }),
   } });
   await prisma.auditEvent.create({ data: { actor: "autonomous-agent", action: "AUTONOMOUS_CONTENT_CREATED", entityType: "ContentItem", entityId: content.id, details: asJson({ topic: decision.topic, format: decision.format, provider: draft.provider, model: draft.model, fallbackFrom, confidence: decision.confidence }) } });
 
@@ -104,13 +115,13 @@ export async function runAutonomousCampaign(now = new Date(), guidanceOverride?:
   if (!livePublishing) {
     const reason = "Dry-run mode: the agent saved a preview draft; no Facebook post was published.";
     await prisma.agentDecision.updateMany({ where: { runId }, data: { outcome: asJson({ published: false, dryRun: true, contentId: content.id, reason }) } });
-    return { skipped: false, mode: "dry-run", contentId: content.id, topic: decision.topic, format: decision.format, rationale: decision.rationale, confidence: decision.confidence, provider: draft.provider, model: draft.model, fallbackFrom, reason, published: { published: false, reason } };
+    return { skipped: false, mode: "dry-run", contentId: content.id, topic: decision.topic, format: finalFormat, rationale: decision.rationale, confidence: decision.confidence, provider: draft.provider, model: draft.model, fallbackFrom, reason, published: { published: false, reason } };
   }
   // Publish within the same protected cron execution. publishContentItem re-checks Agent Mode, so a human toggling OFF mid-run wins.
   try {
     const published = await publishContentItem(content.id, "autonomous-agent");
     await prisma.agentDecision.updateMany({ where: { runId }, data: { outcome: asJson({ published: true, postId: published.postId, mediaType: "mediaType" in published ? published.mediaType : null, publishedAt: "publishedAt" in published ? published.publishedAt : null }) } });
-    return { skipped: false, mode: "autonomous-publish", contentId: content.id, topic: decision.topic, format: decision.format, rationale: decision.rationale, confidence: decision.confidence, provider: draft.provider, model: draft.model, fallbackFrom, published };
+    return { skipped: false, mode: "autonomous-publish", contentId: content.id, topic: decision.topic, format: finalFormat, rationale: decision.rationale, confidence: decision.confidence, provider: draft.provider, model: draft.model, fallbackFrom, published };
   } catch (error) {
     await prisma.agentDecision.updateMany({ where: { runId }, data: { outcome: asJson({ published: false, error: classifyFailure(error).message.slice(0, 300), draftKept: true }) } });
     throw error;
@@ -172,12 +183,9 @@ export async function createContentNow(options: { format: "AUTO" | "POST" | "REE
   const format = options.format === "AUTO" ? decision.format : options.format;
   const topic = options.topic?.trim() ? options.topic.trim().slice(0, 200) : decision.topic;
   const recent = await prisma.contentItem.findMany({ orderBy: { createdAt: "desc" }, take: 40, select: { title: true, topic: true, format: true, caption: true, creativeAngle: true } });
-  const draft = await generateDraft({ topic, format, audience: decision.audience, goal: decision.goal, creativeAngle: decision.creativeAngle, visualStyle: "AUTO", guidance, avoidRecent: recent });
-  const { visualStyle, designPalette, assetUrl, linkAssetUrl } = await buildCreative({ title: draft.title, subtitle: draft.subtitle, caption: draft.caption, format });
-  const content = await prisma.contentItem.create({ data: {
-    title: draft.title, format, topic, creativeAngle: decision.creativeAngle, visualStyle, designPalette, subtitle: draft.subtitle, language: "bn", caption: draft.caption,
-    hashtags: asJson(draft.hashtags), callToAction: "মেসেঞ্জারে যোগাযোগ করুন", script: draft.script, reelScenes: draft.reelScenes ? asJson(draft.reelScenes) : undefined, assetUrl, linkAssetUrl, status: "DRAFT",
-  } });
+  const draft = await generateDraft({ topic, format, reelStyle: decision.reelStyle, audience: decision.audience, goal: decision.goal, creativeAngle: decision.creativeAngle, visualStyle: "AUTO", guidance, avoidRecent: recent });
+  const creative = await buildCreativeForDraft({ title: draft.title, subtitle: draft.subtitle, caption: draft.caption, format, draft });
+  const content = await prisma.contentItem.create({ data: { ...draftColumns(draft, creative), format, topic, creativeAngle: decision.creativeAngle, status: "DRAFT" } });
   await prisma.agentDecision.create({ data: { runId: `manual-create-now-${content.id}`, category: "MANUAL_CONTENT_NOW", observation: asJson(decision.observation), hypothesis: `Created on request by ${options.actor}: ${options.format === "AUTO" ? "agent-chosen" : options.format} format${options.topic?.trim() ? ", operator-chosen topic" : ""}.`, confidence: decision.confidence, action: asJson({ contentId: content.id, topic, format, published: false, requestedPublish: options.publish }) } });
   await prisma.auditEvent.create({ data: { actor: options.actor, action: "CONTENT_CREATED_NOW", entityType: "ContentItem", entityId: content.id, details: asJson({ format, provider: draft.provider, model: draft.model, publishRequested: options.publish }) } });
   if (!options.publish) return { contentId: content.id, format, topic, published: false as const };

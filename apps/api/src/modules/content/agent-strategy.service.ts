@@ -1,4 +1,5 @@
 import { loadBusinessContext } from "../business/business.service.js";
+import { loadBrief } from "../agent/brief.service.js";
 import { prisma } from "../../lib/prisma.js";
 import { CREATIVE_ANGLES, type CreativeAngle } from "./content.service.js";
 import { selectAudienceFromLeads } from "./agent-strategy.helpers.js";
@@ -36,6 +37,8 @@ const TOPIC_BANK = [
 export type AgentContentDecision = {
   topic: string;
   format: "POST" | "REEL";
+  /** Only meaningful for Reels: a cinematic mini-story or a presenter-style explainer. */
+  reelStyle: "STORY" | "EXPLAINER";
   creativeAngle: Exclude<CreativeAngle, "AUTO">;
   visualStyle: "AUTO";
   audience: string;
@@ -109,13 +112,17 @@ export async function decideNextContent(guidance = ""): Promise<AgentContentDeci
     `মেসেঞ্জারে কোন তথ্যগুলো জানালে দ্রুত উপযুক্ত শিক্ষক খোঁজা যায়: ক্লাস, বিষয়, এলাকা ও সময়`,
   ];
   const VARIANTS = ["", " — অভিভাবকের চেকলিস্ট", " — ৩ ধাপে করণীয়", " — সাধারণ ভুল এড়ানোর উপায়", " — বাস্তবসম্মত প্রশ্নোত্তর"];
-  const bases = [...leadTopics, ...profileTopics, ...TOPIC_BANK];
+  // The owner's own instructions come first: topics derived from the brief are used before any built-in topic.
+  const brief = await loadBrief(guidance);
+  const briefTopics = brief?.focusTopics ?? [];
+  const bases = [...briefTopics, ...leadTopics, ...profileTopics, ...TOPIC_BANK];
   // Every base topic is used once (in a rotating order) before any variant of it appears again: no back-to-back repeats of one theme.
   const topicVariants = VARIANTS.flatMap(variant => bases.map(base => `${base}${variant}`));
   const unseenTopics = topicVariants.filter(candidate => !recentTopics.has(candidate.toLocaleLowerCase()));
   const dayNumber = Math.floor(Date.now() / 86_400_000);
+  const briefUnseen = unseenTopics.filter(candidate => briefTopics.some(base => candidate === base));
   const pickable = unseenTopics.slice(0, Math.max(1, Math.min(unseenTopics.length, bases.length)));
-  const topic = pickable.length ? pickable[(dayNumber + recent.length) % pickable.length]! : `${TOPIC_BANK[recent.length % TOPIC_BANK.length]} — নতুন দৃষ্টিভঙ্গি ${recent.length + 1}`;
+  const topic = briefUnseen.length ? briefUnseen[0]! : pickable.length ? pickable[(dayNumber + recent.length) % pickable.length]! : `${TOPIC_BANK[recent.length % TOPIC_BANK.length]} — নতুন দৃষ্টিভঙ্গি ${recent.length + 1}`;
   const anglePool = CREATIVE_ANGLES.filter((angle): angle is Exclude<CreativeAngle, "AUTO"> => angle !== "AUTO");
   const recentAngles = recent.slice(0, 6).map(item => item.creativeAngle).filter((angle): angle is string => Boolean(angle));
   const angleStats = anglePool.map(angle => { const samples = measured(contentStats.filter(item => item.creativeAngle === angle)); return { angle, samples: samples.length, score: scoreOf(samples) }; });
@@ -140,8 +147,12 @@ export async function decideNextContent(guidance = ""): Promise<AgentContentDeci
   const rationale = enoughAttribution
     ? `Agent selected ${format} because it has the stronger qualified-lead/booking and unique-media-view signal in the available attributed sample. The next topic and angle are rotated to avoid recent work.`
     : `Agent selected ${format} to diversify recent formats. ${qualifiedAttributed} qualified/booked leads have source attribution; ${insightsAvailable} insight-bearing posts are in the latest Page snapshot. Until there are at least three measured items per format and reliable lead attribution, format choice is an exploration test rather than a proven winner.`;
+  // Reel style: follow the owner's brief if it names one; otherwise alternate between the story and the explainer.
+  const lastReel = await prisma.contentItem.findFirst({ where: { format: "REEL" }, orderBy: { createdAt: "desc" }, select: { reelPlan: true } }).catch(() => null);
+  const lastStyle = (lastReel?.reelPlan as { style?: string } | null)?.style;
+  const reelStyle: "STORY" | "EXPLAINER" = brief?.videoStyle === "STORY" || brief?.videoStyle === "EXPLAINER" ? brief.videoStyle : lastStyle === "EXPLAINER" ? "STORY" : "EXPLAINER";
   return {
-    topic, format, creativeAngle, visualStyle: "AUTO", audience,
+    topic, format, reelStyle, creativeAngle, visualStyle: "AUTO", audience,
     goal, rationale, confidence: enoughAttribution ? 0.72 : evidenceAvailable ? 0.48 : 0.3,
     observation: {
       recentContentCount: recent.length, lastFiveFormats: lastFormats, formatScores: byFormat, angleScores: angleStats.filter(item => item.samples > 0), angleChosenByEvidence: Boolean(provenAngle),

@@ -5,10 +5,11 @@ import { findUnsupportedCharacters, resolveFontsDir } from "../../lib/fonts.js";
 import { messengerBaseUrl } from "./messenger-link.js";
 import { env } from "../../config/env.js";
 import { publicBaseUrl } from "../share.routes.js";
-import { resolveReelFrameTexts } from "./reel-frames.js";
+import { lintFields } from "../video/bangla-lint.js";
+import type { ReelPlan } from "../video/reel-plan.js";
 
 export type PublishCheck = { id: string; label: string; ok: boolean; detail?: string };
-export type CheckableContent = { id: string; title: string; format: string; caption: string; script: string | null; reelScenes?: unknown; assetUrl: string | null; linkAssetUrl?: string | null };
+export type CheckableContent = { id: string; title: string; format: string; caption: string; script: string | null; reelScenes?: unknown; assetUrl: string | null; linkAssetUrl?: string | null; subtitle?: string | null; reelPlan?: unknown; voiceAudio?: Uint8Array | null; voiceSeconds?: number | null };
 
 const CTA_IN_TEXT = /মেসেঞ্জার|Messenger/i;
 
@@ -34,11 +35,22 @@ export async function runPublishChecks(content: CheckableContent): Promise<{ ok:
   try { resolveFontsDir(); add("fonts", "Bangla fonts are available to the renderer", true); }
   catch (error) { add("fonts", "Bangla fonts are available to the renderer", false, error instanceof Error ? error.message : "Fonts missing"); }
 
+  const spelling = lintFields({ title: content.title, subtitle: content.subtitle ?? "", caption: content.caption });
+  add("spelling", "Text passes the built-in Bangla spelling and structure checks", spelling.issues.length === 0, spelling.issues.slice(0, 3).join("; ") || undefined);
+
   if (content.format === "REEL") {
-    const frames = resolveReelFrameTexts(content);
-    add("reel-scenes", "Reel has a hook, 3+ scenes and an end card", frames.length >= 5, `${frames.length} frames`);
-    const missing = findUnsupportedCharacters(frames.join(" "));
-    add("reel-glyphs", "Every Reel character can be drawn by the bundled font", missing.length === 0, missing.join(" ") || undefined);
+    const plan = content.reelPlan as ReelPlan | null;
+    const planOk = Boolean(plan && Array.isArray(plan.scenes) && plan.scenes.length >= 3);
+    add("reel-plan", "Reel has a complete scene plan", planOk, planOk ? `${plan!.scenes.length} scenes + end card, style ${plan!.style}` : "missing");
+    const voiceOk = Boolean(content.voiceAudio && content.voiceAudio.length > 5000 && (content.voiceSeconds ?? 0) > 3);
+    add("reel-voice", "Reel has its complete voice-over", voiceOk, voiceOk ? `${Math.round(content.voiceSeconds ?? 0)} s of narration` : "A Reel is never published without its voice-over");
+    if (plan) {
+      const texts = [plan.headline ?? "", ...plan.scenes.map(scene => scene.narration)].join(" ").replace(/\[\[|\]\]/g, "");
+      const missing = findUnsupportedCharacters(texts);
+      add("reel-glyphs", "Every Reel character can be drawn by the bundled font", missing.length === 0, missing.join(" ") || undefined);
+      const lint = lintFields({ headline: plan.headline ?? "", narrations: plan.scenes.map(scene => scene.narration) });
+      add("reel-spelling", "Reel narration and headline pass the Bangla spelling checks", lint.issues.length === 0, lint.issues.slice(0, 3).join("; ") || undefined);
+    }
   } else {
     const bytes = content.assetUrl ? dataUrlToBuffer(content.assetUrl) : null;
     add("creative-present", "Branded banner exists", Boolean(bytes));

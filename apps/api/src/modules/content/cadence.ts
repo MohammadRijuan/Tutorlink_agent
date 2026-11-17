@@ -1,7 +1,8 @@
 /**
  * Posting rhythm. Pure functions, so the rules the agent follows are also what the dashboard forecasts.
  *  - With qualified/booked leads recorded in the last 7 days: post as often as MIN_HOURS_BETWEEN_POSTS allows (about daily).
- *  - With none recorded: wait NO_LEAD_WAIT_HOURS (default 40 h, i.e. every second daily run) instead of posting blindly.
+ *  - With none recorded: wait NO_LEAD_WAIT_HOURS (default 33 h) instead of posting blindly. The campaign runs twice a day
+ *    (9:30 AM and 7:30 PM Bangladesh time), so 33 h gives a post about every 1.5 days (34 h, then 38 h, alternating).
  *  - Never more than MAX_POSTS_PER_7_DAYS.
  */
 export type CadenceInput = {
@@ -39,11 +40,13 @@ export function evaluateCadence(input: CadenceInput): CadenceVerdict {
   return { allowed: reason === null, reason, requiredGapHours, earliestAt: earliest, leadMode };
 }
 
-/** The daily Vercel Cron for the campaign (vercel.json: 30 3 * * * = 03:30 UTC = 09:30 Bangladesh time). */
+/** Campaign run times (vercel.json): 03:30 UTC = 09:30 and 13:30 UTC = 19:30 Bangladesh time. */
+export const CAMPAIGN_RUNS_UTC: Array<[number, number]> = [[3, 30], [13, 30]];
+
 export function nextCampaignRun(now: Date): Date {
-  const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 3, 30, 0));
-  if (next.getTime() <= now.getTime()) next.setUTCDate(next.getUTCDate() + 1);
-  return next;
+  const candidates: Date[] = [];
+  for (const dayOffset of [0, 1]) for (const [hour, minute] of CAMPAIGN_RUNS_UTC) candidates.push(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + dayOffset, hour, minute, 0)));
+  return candidates.filter(candidate => candidate.getTime() > now.getTime()).sort((a, b) => a.getTime() - b.getTime())[0]!;
 }
 
 /** First campaign run at which the cadence rules would let a post out, assuming nothing changes (no new leads, nothing else published). */
@@ -51,10 +54,10 @@ export function forecastFirstPost(input: CadenceInput): { nextRunAt: Date; willP
   const verdictNow = evaluateCadence(input);
   const nextRunAt = nextCampaignRun(input.now);
   let run = nextRunAt;
-  for (let i = 0; i < 14; i++) {
+  for (let i = 0; i < 30; i++) {
     const verdict = evaluateCadence({ ...input, now: new Date(run.getTime() + 5_000) });
     if (verdict.allowed) return { nextRunAt, willPostAtNextRun: run.getTime() === nextRunAt.getTime(), firstPostAt: run, verdictNow };
-    run = new Date(run.getTime() + 24 * HOUR);
+    run = nextCampaignRun(new Date(run.getTime() + 60_000));
   }
   return { nextRunAt, willPostAtNextRun: false, firstPostAt: run, verdictNow };
 }

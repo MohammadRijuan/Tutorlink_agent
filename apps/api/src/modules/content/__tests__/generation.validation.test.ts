@@ -5,10 +5,18 @@ import { clampAtWord, deriveScenesFromScript, isRecentDraftDuplicate, parseGener
 import { REQUIRED_HASHTAG, REQUIRED_PHONE, REQUIRED_CTA } from "../safety.rules.js";
 
 const post = { topic: "সঠিক টিউটর নির্বাচন", format: "POST" as const };
-const reel = { topic: "সঠিক টিউটর নির্বাচন", format: "REEL" as const };
+const reel = { topic: "সঠিক টিউটর নির্বাচন", format: "REEL" as const, reelStyle: "EXPLAINER" as const };
 const caption = "হোম টিউটর খোঁজার আগে সন্তানের শ্রেণি, বিষয়, এলাকা ও সুবিধাজনক সময় গুছিয়ে নিন। পরিষ্কার তথ্য দিলে প্রয়োজন অনুযায়ী উপযুক্ত টিউটর খোঁজার আলোচনা সহজ হয়। সপ্তাহে কয় দিন পড়ানো লাগবে এবং কোন বিষয়ে সবচেয়ে বেশি সহায়তা দরকার, তা আগেই লিখে রাখুন।";
 const validDraft = { title: "সঠিক টিউটর নির্বাচন", caption, hashtags: ["#HomeTutor"], script: null, scenes: [] };
-const validReel = { ...validDraft, script: "দৃশ্য ১: পড়াশোনার সমস্যা দেখান।\nদৃশ্য ২: প্রয়োজন লিখুন।", scenes: ["সন্তানের পড়াশোনা নিয়ে চিন্তিত?", "শ্রেণি, বিষয় ও এলাকা লিখে রাখুন", "সময়সূচি আগে থেকে ঠিক করুন"] };
+const scene = (narration: string, visual = "study-desk") => ({ narration, emphasis: [], visual });
+const validReel = { ...validDraft, reel: { style: "EXPLAINER", headline: "চট্টগ্রামে [[উপযুক্ত গৃহশিক্ষক]] খুঁজছেন?", scenes: [
+  scene("আসসালামু আলাইকুম অভিভাবকবৃন্দ। সন্তানের জন্য সঠিক গৃহশিক্ষক খোঁজা কি আপনার কাছে কঠিন মনে হচ্ছে?", "worried-parent"),
+  scene("অনেক বিজ্ঞাপন আর মানুষের ভিড়ে ভুল সিদ্ধান্ত নেওয়ার ভয় থাকে, তাই ভেবেচিন্তে এগোনো দরকার।"),
+  scene("আমরা আপনার সন্তানের ক্লাস, বিষয়, এলাকা ও সময় অনুযায়ী উপযুক্ত শিক্ষক খুঁজে পেতে সাহায্য করি।", "tutor-teaching"),
+  scene("প্লে থেকে দ্বাদশ শ্রেণি এবং ভর্তি পরীক্ষার প্রস্তুতির জন্য আলাদা আলাদা শিক্ষক খোঁজার সুযোগ আছে।", "exam-prep"),
+  scene("আপনি শুধু মেসেঞ্জারে ক্লাস, বিষয়, এলাকা আর সময় জানাবেন, তারপর আমরা আপনার সঙ্গে কথা বলব।", "phone-chat"),
+  scene("এভাবেই সন্তানের জন্য নিশ্চিন্তে একজন উপযুক্ত শিক্ষক বেছে নেওয়া অনেক সহজ হয়ে যায়।", "happy-family"),
+] } };
 
 test("generated content is validated and required TutorLink branding is enforced", () => {
   const result = validateGeneratedDraft(reel, validReel);
@@ -16,13 +24,15 @@ test("generated content is validated and required TutorLink branding is enforced
   assert.ok(result.caption.includes(REQUIRED_CTA));
   assert.ok(result.hashtags.includes(REQUIRED_HASHTAG));
   assert.ok(result.script?.includes(REQUIRED_PHONE));
-  assert.equal(result.reelScenes?.length, 3);
+  assert.equal(result.reelScenes?.length, 6);
+  assert.equal(result.reelPlan?.style, "EXPLAINER");
+  assert.ok(result.narration?.includes("শূন্য এক আট আট ছয়"), "the phone number is spoken digit by digit");
 });
 
 test("generation output without Bangla, a Reel script or enough scenes is rejected so the next model can try", () => {
   assert.throws(() => validateGeneratedDraft(post, { ...validDraft, caption: "English only caption that is long enough to pass the length rule but has no Bangla at all in it." }), /Bangla/);
-  assert.throws(() => validateGeneratedDraft(reel, { ...validReel, script: null }), /script/);
-  assert.throws(() => validateGeneratedDraft(reel, { ...validReel, scenes: ["একটি"], script: "দৃশ্য ১: ছোট" }), /scenes/);
+  assert.throws(() => validateGeneratedDraft(reel, { ...validReel, reel: null }), /reel plan/);
+  assert.throws(() => validateGeneratedDraft(reel, { ...validReel, reel: { ...validReel.reel, scenes: validReel.reel.scenes.slice(0, 2) } }), /scenes/);
   assert.throws(() => validateGeneratedDraft(post, { ...validDraft, title: "English headline" }), /headline/);
 });
 

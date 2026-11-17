@@ -68,3 +68,18 @@ Evidence legend: **U** = automated unit test (see the v1.1 count below) · **E**
 | Bangla hashtag/vowel-sign bug | Hashtags with vowel signs (#হোমটিউটর) and subject names like গণিত were being damaged by letter-only patterns; fixed and tested | U |
 
 Verification for v1.1: 70+ unit tests and a 52-check end-to-end run (real Express + real PostgreSQL, Meta mocked), a dashboard run through the Next.js proxy (sign-in, data endpoints, PNG delivery, cookie handling), all 10 layouts × 3 sizes rendered and inspected, a Reel MP4 rendered and inspected, and the production build path.
+
+
+## Version 1.2: voice-over Reels, spelling safety, enforced instructions
+| Request | What changed | Evidence |
+|---|---|---|
+| Videos/Reels like the two references, with voice, using my Page name and logo; the old slideshow "looks so bad and has no voice" | New **video studio** with two styles (story, explainer): Bangla voice-over (free Gemini TTS), kinetic subtitles with highlighted keywords, pinned headline bar, phone pinned, Page logo and name on every Reel, branded end card, photo (Pexels) or illustrated scenes with camera movement. The old silent slideshow is removed. See `VIDEO_STUDIO.md` (includes the measured analysis of both references). | U, E, R |
+| Every video complete, no cut-off voice | Voice is generated once for the whole script; scene changes land on natural pauses; the video always outlasts the last word; no voice = no Reel (feed post instead) | U, E (finished MP4 measured against the voice) |
+| No spelling mistakes in video, reels, banner, content | Two layers: built-in Bangla checks (auto-fix ~25 common misspellings, reject structural errors) + AI proofreader that may only correct; unchecked drafts are never used | U, E |
+| Agent does not follow my instructions | Instructions are interpreted into rules and shown back, are mandatory in prompts, choose topics, can fix the video style, and every draft is checked against them | U, E |
+| Reduce 2 days to 1.5 days | `NO_LEAD_WAIT_HOURS=33` and the campaign now runs twice a day (9:30 AM and 7:30 PM Bangladesh time); gaps alternate 34 h and 38 h | U, E |
+| Lead quality like a paid campaign, organically | Hook, trust, process and one qualifying action (class, subject, area, time) in every video/post; Send Message button; per-post attribution; see `VIDEO_STUDIO.md` | E |
+| Banner styles like my example | Done in 1.1 (10 layouts × 8 palettes incl. your style) | R |
+
+Verification for 1.2 (run on the restored and rebuilt project after a sandbox reset): 98 unit tests; a 41-check end-to-end run against real PostgreSQL with Meta and the Google AI services mocked at the network layer (voice Reel published as a real MP4 with measured audio, preview, proofreading rejection, spelling auto-fix, instruction interpretation, voice-failure fallback, link card, rhythm, webhook attribution, auto-pause, stuck-publish); both Reel styles rendered and inspected frame by frame; production build.
+**Not testable from here:** the real quality of Gemini's Bangla voices (listen to samples in Settings), your Pexels key, Facebook accepting the Reel, and Vercel timing. A 50-second Reel rendered in about a minute on one CPU; if a run ever times out, lower `REEL_MAX_SECONDS` or keep `REEL_WIDTH=720`.

@@ -4,6 +4,7 @@ import { getAiUsage } from "./ai/ai.service.js";
 import { getAutomationState } from "./agent-control.service.js";
 import { getBusinessProfile } from "./business/business.service.js";
 import { publicBaseUrl } from "./share.routes.js";
+import { ttsConfigured } from "./video/tts.service.js";
 
 export type Alert = { id: string; level: "action" | "warn" | "info"; title: string; detail: string; where?: string };
 
@@ -31,6 +32,8 @@ export async function buildAlerts(snapshotGaps: Array<{ area: string; message: s
   if (profile && !profile.configured) alerts.push({ id: "business-facts", level: "info", title: "Review your business facts", detail: "The agent is using the facts from your banner (programs, universities, verified teachers). Check them and press Save under Settings.", where: "settings" });
   if (usage?.usedToday != null && usage.usedToday >= usage.dailyLimit * 0.8) alerts.push({ id: "ai-quota", level: "warn", title: "Free AI quota is nearly used up today", detail: `${usage.usedToday} of ${usage.dailyLimit} requests used. It resets at midnight Bangladesh time.`, where: "settings" });
   if (!publicBaseUrl() && env.META_POST_STYLE === "auto") alerts.push({ id: "public-url", level: "info", title: "Native Send Message button is not active", detail: "Set PUBLIC_API_URL (your API's https address) on the API project and redeploy. Until then posts use a photo with a Messenger link.", where: "settings" });
+  if (!ttsConfigured() && env.AI_PROVIDER !== "template") alerts.push({ id: "no-voice", level: "warn", title: "Voice-over is not available, so no Reels will be posted", detail: "Add GEMINI_API_KEY (a free Google AI Studio key) to the API project. Until then the agent posts feed posts instead of silent videos.", where: "settings" });
+  else if (!env.PEXELS_API_KEY) alerts.push({ id: "no-photos", level: "info", title: "Reel scenes use illustrations, not photos", detail: "Add a FREE Pexels key (PEXELS_API_KEY) to the API project and scenes get real photos with camera movement.", where: "settings" });
   const order = { action: 0, warn: 1, info: 2 } as const;
   return alerts.sort((a, b) => order[a.level] - order[b.level]);
 }

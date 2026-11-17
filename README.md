@@ -1,7 +1,7 @@
 # TutorLink AI Marketing Manager
 
 An autonomous, lead-first organic Facebook marketing agent for TutorLink Tuition Media (Chattogram).
-It decides what to post (feed banner or Reel), writes Bangla content, renders the creative, publishes through the
+It decides what to post (feed banner or a voice-over Reel), writes proofread Bangla content, renders the creative, publishes through the
 official Meta APIs, captures Messenger/comment enquiries through signed webhooks, and learns from qualified leads.
 Everything runs on free tiers: Vercel Hobby, Neon Postgres, Google Gemini (free) and Groq (free).
 
@@ -16,7 +16,8 @@ Everything runs on free tiers: Vercel Hobby, Neon Postgres, Google Gemini (free)
 2. **Database trouble / old migration history:** [`docs/DATABASE_MIGRATION.md`](docs/DATABASE_MIGRATION.md).
 3. **How the agent works, what it does when something fails or no leads come, and what you do:** [`docs/AGENT_PLAYBOOK.md`](docs/AGENT_PLAYBOOK.md).
 4. **Which AI model and why:** [`docs/AI_MODELS.md`](docs/AI_MODELS.md).
-5. **Every requirement vs. what is implemented and how it was verified:** [`docs/REQUIREMENTS_CHECKLIST.md`](docs/REQUIREMENTS_CHECKLIST.md).
+5. **Voice-over Reels, spelling safety, and your two reference videos analysed:** [`docs/VIDEO_STUDIO.md`](docs/VIDEO_STUDIO.md).
+6. **Every requirement vs. what is implemented and how it was verified:** [`docs/REQUIREMENTS_CHECKLIST.md`](docs/REQUIREMENTS_CHECKLIST.md).
 
 ## Local development
 ```bash

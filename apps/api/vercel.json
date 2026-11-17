@@ -19,12 +19,12 @@
   },
   "crons": [
     {
-      "path": "/api/cron/performance-monitor",
-      "schedule": "0 3 * * *"
-    },
-    {
       "path": "/api/cron/content-generation",
       "schedule": "30 3 * * *"
+    },
+    {
+      "path": "/api/cron/content-generation?slot=evening",
+      "schedule": "30 13 * * *"
     }
   ],
   "regions": [

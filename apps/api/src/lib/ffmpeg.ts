@@ -40,3 +40,17 @@ export function ffmpegBinary(): string {
   }
   return (resolved = "ffmpeg");
 }
+
+import { spawn } from "node:child_process";
+
+/** Runs FFmpeg and returns its stderr (where it prints stream info and filter output). Rejects with a short, readable message on failure. */
+export function runFfmpeg(args: string[], options: { timeoutMs?: number } = {}): Promise<{ stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(ffmpegBinary(), args, { stdio: ["ignore", "ignore", "pipe"] });
+    let stderr = "";
+    child.stderr.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-60_000); });
+    const timer = setTimeout(() => { child.kill("SIGKILL"); reject(new Error("FFmpeg timed out")); }, options.timeoutMs ?? 120_000);
+    child.on("error", error => { clearTimeout(timer); reject(new Error(`FFmpeg could not start: ${error.message.slice(0, 160)}`)); });
+    child.on("close", code => { clearTimeout(timer); code === 0 ? resolve({ stderr }) : reject(new Error(`FFmpeg exit ${code}: ${stderr.slice(-500)}`)); });
+  });
+}

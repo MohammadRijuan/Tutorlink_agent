@@ -4,7 +4,7 @@ import { z } from "zod";
 import { env } from "../../config/env.js";
 import { prisma } from "../../lib/prisma.js";
 import { classifyFailure, OperationError } from "../../lib/retry.js";
-import { buildCreativeForDraft } from "../content/creative.service.js";
+import { buildCreativeForDraft, draftColumns } from "../content/creative.service.js";
 import { assertAiBudget } from "../ai/ai.service.js";
 import { CREATIVE_ANGLES, VISUAL_STYLES, generateDraft, type GenerateInput } from "../content/content.service.js";
 
@@ -28,6 +28,8 @@ const draftSchema = z.object({
   hashtags: z.array(z.string().max(80)).max(10),
   script: z.string().max(10000).nullable(),
   subtitle: z.string().max(300).nullable().optional(),
+  reelPlan: z.any().nullable().optional(),
+  narration: z.string().max(12000).nullable().optional(),
   reelScenes: z.array(z.string().max(200)).max(6).nullable().optional(),
   model: z.string().max(180),
   provider: z.string().max(40),
@@ -265,7 +267,8 @@ async function runClaimedJob(job: Claim) {
   }
 
   if (automatic && !(await automationEnabled())) return deferForHumanTakeover(job);
-  const { visualStyle, designPalette, assetUrl, linkAssetUrl } = await buildCreativeForDraft({ title: draft.title, subtitle: draft.subtitle, caption: draft.caption, format: input.format, requestedStyle: input.visualStyle });
+  const creative = await buildCreativeForDraft({ title: draft.title, subtitle: draft.subtitle, caption: draft.caption, format: input.format, requestedStyle: input.visualStyle, draft: draft as never });
+  const visualStyle = creative.visualStyle;
   await prisma.$transaction(async (tx) => {
     if (automatic) {
       const safety = await tx.$queryRaw<Array<{ key: string; value: unknown }>>`
@@ -278,22 +281,7 @@ async function runClaimedJob(job: Claim) {
       if (values.globalAutomationPaused !== false || values.agentMode !== true) throw new AutomationPausedError();
     }
     const content = await tx.contentItem.create({
-      data: {
-        title: draft.title,
-        format: input.format,
-        topic: input.topic,
-        creativeAngle: input.creativeAngle || "AUTO",
-        visualStyle,
-        language: "bn",
-        caption: draft.caption,
-        hashtags: toJson(draft.hashtags),
-        callToAction: "মেসেঞ্জারে যোগাযোগ করুন",
-        script: draft.script,
-        reelScenes: draft.reelScenes ? toJson(draft.reelScenes) : undefined,
-        subtitle: draft.subtitle, designPalette, linkAssetUrl,
-        assetUrl,
-        status: "DRAFT",
-      },
+      data: { ...draftColumns(draft as never, creative), format: input.format, topic: input.topic, creativeAngle: input.creativeAngle || "AUTO", status: "DRAFT" },
     });
     const completed = await tx.jobRun.updateMany({
       where: { id: job.id, status: "PROCESSING", attemptCount: job.attemptCount },

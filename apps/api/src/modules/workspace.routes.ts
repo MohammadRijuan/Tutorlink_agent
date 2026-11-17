@@ -8,12 +8,14 @@ import { publishContentItem } from "./meta/publishing.service.js";
 import { runAutonomousCampaign } from "./content/automation.service.js";
 import { CREATIVE_ANGLES, VISUAL_STYLES, generateDraft } from "./content/content.service.js";
 import { decideNextContent } from "./content/agent-strategy.service.js";
-import { buildCreativeForDraft } from "./content/creative.service.js";
+import { buildCreativeForDraft, draftColumns } from "./content/creative.service.js";
+import { saveBrief, loadBrief } from "./agent/brief.service.js";
+import { getSelectedVoice, getTtsUsage, ttsConfigured, VOICES, synthesizeSpeech } from "./video/tts.service.js";
+import { pcmToWav } from "./video/audio.js";
 import { getAiUsage, runAiSelfTest, configuredChain } from "./ai/ai.service.js";
 import { businessProfileSchema, getBusinessProfile, saveBusinessProfile } from "./business/business.service.js";
 import { runPublishChecks } from "./meta/publish-checks.js";
-import { buildFinalCaption } from "./meta/publishing.service.js";
-import { resolveReelFrameTexts } from "./meta/reel-frames.js";
+import { buildFinalCaption, renderStoredReel } from "./meta/publishing.service.js";
 import { getAutomationState } from "./agent-control.service.js";
 import { buildAlerts } from "./dashboard-alerts.js";
 import { createContentNow, getCampaignOutlook } from "./content/automation.service.js";
@@ -79,9 +81,7 @@ workspaceRouter.patch("/settings/safety", asyncRoute(async (req, res) => {
 workspaceRouter.post("/campaign/run", asyncRoute(async (req, res) => {
   const parsed = z.object({ guidance: z.string().trim().max(1800).optional() }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: { message: "Guidance must be 1,800 characters or fewer." } });
-  if (parsed.data.guidance !== undefined) {
-    await prisma.systemSetting.upsert({ where: { key: "agentGuidance" }, create: { key: "agentGuidance", value: parsed.data.guidance }, update: { value: parsed.data.guidance } });
-  }
+  if (parsed.data.guidance !== undefined) await saveBrief(parsed.data.guidance);
   try {
     const result = await runAutonomousCampaign(new Date(), parsed.data.guidance, { allowDryRunDraft: true });
     return res.json({ data: result });
@@ -94,14 +94,16 @@ workspaceRouter.post("/campaign/run", asyncRoute(async (req, res) => {
 
 workspaceRouter.get("/agent/guidance", asyncRoute(async (_req, res) => {
   const setting = await prisma.systemSetting.findUnique({ where: { key: "agentGuidance" } });
-  return res.json({ guidance: typeof setting?.value === "string" ? setting.value : "" });
+  const guidance = typeof setting?.value === "string" ? setting.value : "";
+  return res.json({ guidance, brief: await loadBrief(guidance) });
 }));
+/** Saving instructions also interprets them into checkable rules, which the owner can read back to confirm the agent understood. */
 workspaceRouter.put("/agent/guidance", asyncRoute(async (req, res) => {
   const parsed = z.object({ guidance: z.string().trim().max(1800).default("") }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: { message: "Guidance must be 1,800 characters or fewer." } });
-  const setting = await prisma.systemSetting.upsert({ where: { key: "agentGuidance" }, create: { key: "agentGuidance", value: parsed.data.guidance }, update: { value: parsed.data.guidance } });
-  await prisma.auditEvent.create({ data: { actor: req.adminUser?.email || "admin", action: "AGENT_GUIDANCE_UPDATED", details: asJson({ guidanceLength: parsed.data.guidance.length, guidanceEnabled: Boolean(parsed.data.guidance) }) } });
-  return res.json({ guidance: typeof setting.value === "string" ? setting.value : "", saved: true });
+  const brief = await saveBrief(parsed.data.guidance);
+  await prisma.auditEvent.create({ data: { actor: req.adminUser?.email || "admin", action: "AGENT_GUIDANCE_UPDATED", details: asJson({ guidanceLength: parsed.data.guidance.length, interpretedBy: brief.interpretedBy, doubts: brief.doubts.length }) } });
+  return res.json({ guidance: parsed.data.guidance, brief, saved: true });
 }));
 
 workspaceRouter.get("/page/snapshots", asyncRoute(async (_req, res) => {
@@ -134,7 +136,7 @@ workspaceRouter.post("/performance/monitor", asyncRoute(async (_req, res) => {
 workspaceRouter.get("/content", asyncRoute(async (req, res) => {
   const status = typeof req.query.status === "string" ? req.query.status : undefined;
   const validStatuses = ["IDEA", "DRAFT", "VALIDATED", "SCHEDULED", "PUBLISHING", "PUBLISHED", "FAILED", "PAUSED"];
-  const data = await prisma.contentItem.findMany({ where: status && validStatuses.includes(status) ? { status: status as never } : undefined, orderBy: [{ scheduledAt: "asc" }, { createdAt: "desc" }], take: 30, omit: { assetUrl: true, linkAssetUrl: true } });
+  const data = await prisma.contentItem.findMany({ where: status && validStatuses.includes(status) ? { status: status as never } : undefined, orderBy: [{ scheduledAt: "asc" }, { createdAt: "desc" }], take: 30, omit: { assetUrl: true, linkAssetUrl: true, voiceAudio: true } });
   return res.json({ data });
 }));
 /** Banner/cover image as a real PNG so the browser can cache it and the JSON lists stay small. */
@@ -159,6 +161,34 @@ workspaceRouter.post("/content/create-now", asyncRoute(async (req, res) => {
 }));
 
 workspaceRouter.get("/campaign/outlook", asyncRoute(async (_req, res) => res.json({ data: await getCampaignOutlook() })));
+
+/** Voice-over settings: pick a voice by listening to a sample. */
+workspaceRouter.get("/voice", asyncRoute(async (_req, res) => res.json({ voices: VOICES, selected: await getSelectedVoice(), configured: ttsConfigured(), usage: await getTtsUsage(), maxSeconds: env.REEL_MAX_SECONDS, requireVoice: env.REEL_REQUIRE_VOICE === "true", photos: Boolean(env.PEXELS_API_KEY), width: env.REEL_WIDTH })));
+workspaceRouter.put("/voice", asyncRoute(async (req, res) => {
+  const parsed = z.object({ voice: z.string() }).safeParse(req.body);
+  if (!parsed.success || !VOICES.some(voice => voice.name === parsed.data.voice)) return res.status(400).json({ error: { message: "Choose one of the listed voices." } });
+  await prisma.systemSetting.upsert({ where: { key: "reelVoice" }, create: { key: "reelVoice", value: parsed.data.voice }, update: { value: parsed.data.voice } });
+  await prisma.auditEvent.create({ data: { actor: req.adminUser?.email || "admin", action: "REEL_VOICE_CHANGED", details: asJson({ voice: parsed.data.voice }) } });
+  return res.json({ selected: parsed.data.voice, saved: true });
+}));
+workspaceRouter.post("/voice/sample", asyncRoute(async (req, res) => {
+  const parsed = z.object({ voice: z.string().optional() }).safeParse(req.body);
+  const voice = parsed.success && parsed.data.voice && VOICES.some(item => item.name === parsed.data.voice) ? parsed.data.voice : undefined;
+  try {
+    const speech = await synthesizeSpeech("আসসালামু আলাইকুম অভিভাবকবৃন্দ। সন্তানের জন্য সঠিক গৃহশিক্ষক খোঁজা কি কঠিন মনে হচ্ছে? আজই আপনার প্রয়োজনের কথা মেসেঞ্জারে জানান।", { voice });
+    return res.set("Cache-Control", "no-store").type("audio/wav").send(pcmToWav(speech.pcm));
+  } catch (error) { const failure = classifyFailure(error); return res.status(failure.category === "QUOTA_EXHAUSTED" ? 429 : 502).json({ error: { code: failure.category, message: failure.message } }); }
+}));
+
+/** Renders the Reel (voice, subtitles, logo, end card) at preview size so you can watch and hear it before it is published. Uses the stored voice: no extra voice quota. */
+workspaceRouter.post("/content/:id/render-preview", asyncRoute(async (req, res) => {
+  const content = await prisma.contentItem.findUnique({ where: { id: req.params.id } });
+  if (!content || content.format !== "REEL") return res.status(404).json({ error: { message: "Reel not found." } });
+  try {
+    const result = await renderStoredReel(content, { width: 360 });
+    return res.set({ "Cache-Control": "no-store", "X-Video-Seconds": String(Math.round(result.seconds)) }).type("video/mp4").send(result.bytes);
+  } catch (error) { return res.status(422).json({ error: { code: "RENDER_FAILED", message: error instanceof Error ? error.message : "The preview could not be rendered." } }); }
+}));
 
 workspaceRouter.get("/jobs", asyncRoute(async (req, res) => {
   const parsed = z.coerce.number().int().min(1).max(50).default(20).safeParse(req.query.limit);
@@ -218,24 +248,12 @@ workspaceRouter.post("/content/generate", asyncRoute(async (req, res) => {
           : 502;
       return res.status(status).json({ error: { code: failure.category, message: failure.message } });
     }
-    const { visualStyle, designPalette, assetUrl, linkAssetUrl } = await buildCreativeForDraft({ title: draft.title, subtitle: draft.subtitle, caption: draft.caption, format: parsed.data.format, requestedStyle: parsed.data.visualStyle });
+    let creative: Awaited<ReturnType<typeof buildCreativeForDraft>>;
+    try { creative = await buildCreativeForDraft({ title: draft.title, subtitle: draft.subtitle, caption: draft.caption, format: parsed.data.format, requestedStyle: parsed.data.visualStyle, draft }); }
+    catch (error) { const failure = classifyFailure(error); return res.status(failure.category === "QUOTA_EXHAUSTED" ? 429 : 502).json({ error: { code: failure.category, message: failure.message } }); }
+    const visualStyle = creative.visualStyle;
     const content = await prisma.contentItem.create({
-      data: {
-        title: draft.title,
-        format: parsed.data.format,
-        topic: parsed.data.topic,
-        creativeAngle: parsed.data.creativeAngle || "AUTO",
-        visualStyle,
-        language: "bn",
-        caption: draft.caption,
-        hashtags: asJson(draft.hashtags),
-        callToAction: "মেসেঞ্জারে যোগাযোগ করুন",
-        script: draft.script,
-        reelScenes: draft.reelScenes ? asJson(draft.reelScenes) : undefined,
-        subtitle: draft.subtitle, designPalette, linkAssetUrl,
-        assetUrl,
-        status: "DRAFT",
-      },
+      data: { ...draftColumns(draft, creative), format: parsed.data.format, topic: parsed.data.topic, creativeAngle: parsed.data.creativeAngle || "AUTO", status: "DRAFT" },
     });
     await prisma.auditEvent.create({
       data: { actor, action: "CONTENT_DRAFT_GENERATED", entityType: "ContentItem", entityId: content.id, details: asJson({ provider: draft.provider, model: draft.model, format: parsed.data.format, creativeAngle: parsed.data.creativeAngle || "AUTO", visualStyle, durableQueueAvailable: false }) },
@@ -288,8 +306,11 @@ workspaceRouter.post("/content/agent-generate", asyncRoute(async (req, res) => {
       : ["CONFIGURATION", "AUTHENTICATION", "PERMISSION_DENIED"].includes(failure.category) ? 503 : 502;
     return res.status(status).json({ error: { code: failure.category, message: failure.message } });
   }
-  const { visualStyle, designPalette, assetUrl, linkAssetUrl } = await buildCreativeForDraft({ title: draft.title, subtitle: draft.subtitle, caption: draft.caption, format: input.format });
-  const content = await prisma.contentItem.create({ data: { title: draft.title, format: input.format, topic: input.topic, creativeAngle: input.creativeAngle, visualStyle, language: "bn", caption: draft.caption, hashtags: asJson(draft.hashtags), callToAction: "মেসেঞ্জারে যোগাযোগ করুন", script: draft.script, reelScenes: draft.reelScenes ? asJson(draft.reelScenes) : undefined, subtitle: draft.subtitle, designPalette, linkAssetUrl, assetUrl, status: "DRAFT" } });
+  let creative: Awaited<ReturnType<typeof buildCreativeForDraft>>;
+  try { creative = await buildCreativeForDraft({ title: draft.title, subtitle: draft.subtitle, caption: draft.caption, format: input.format, draft }); }
+  catch (error) { const failure = classifyFailure(error); return res.status(failure.category === "QUOTA_EXHAUSTED" ? 429 : 502).json({ error: { code: failure.category, message: failure.message } }); }
+  const visualStyle = creative.visualStyle;
+  const content = await prisma.contentItem.create({ data: { ...draftColumns(draft, creative), format: input.format, topic: input.topic, creativeAngle: input.creativeAngle, status: "DRAFT" } });
   await prisma.agentDecision.create({ data: { runId, category: "CONTENT_SELECTION", observation: asJson(decision.observation), hypothesis: decision.rationale.slice(0, 1000), confidence: decision.confidence, action: asJson({ contentId: content.id, topic: decision.topic, format: decision.format, creativeAngle: decision.creativeAngle, visualStyle, guidance: parsed.data.guidance || null, published: false }) } });
   await prisma.auditEvent.create({ data: { actor, action: "AGENT_CONTENT_SELECTED", entityType: "ContentItem", entityId: content.id, details: asJson({ topic: decision.topic, format: decision.format, creativeAngle: decision.creativeAngle, confidence: decision.confidence, provider: draft.provider, model: draft.model }) } });
   return res.status(201).json({ data: content, decision: { topic: decision.topic, format: decision.format, creativeAngle: decision.creativeAngle, visualStyle, rationale: decision.rationale, confidence: decision.confidence, observation: decision.observation }, mode: "synchronous", publishing: "disabled", generation: { provider: draft.provider, model: draft.model, warning: "Draft saved; nothing was published. Generation is synchronous in Content Studio so it can run on Vercel Hobby without a frequent worker cron." } });
@@ -318,7 +339,7 @@ workspaceRouter.get("/content/:id/checks", asyncRoute(async (req, res) => {
   const readiness = await runPublishChecks(content);
   let finalCaption: string | null = null;
   try { finalCaption = buildFinalCaption(content.caption, content.id, { hashtags: content.hashtags, includeLink: content.format === "REEL" }); } catch { /* Messenger URL not configured: reported by the checks. */ }
-  return res.json({ data: { ...readiness, finalCaption, reelFrames: content.format === "REEL" ? resolveReelFrameTexts(content) : null, publishMode: env.META_PUBLISH_MODE } });
+  return res.json({ data: { ...readiness, finalCaption, reelNarration: content.format === "REEL" ? ((content.reelScenes as string[] | null) ?? null) : null, reelStyle: (content.reelPlan as { style?: string } | null)?.style ?? null, voiceSeconds: content.voiceSeconds, voiceName: content.voiceName, publishMode: env.META_PUBLISH_MODE } });
 }));
 workspaceRouter.post("/content/:id/resolve-publishing", asyncRoute(async (req, res) => {
   const content = await prisma.contentItem.findUnique({ where: { id: req.params.id }, select: { id: true, status: true, platformPostId: true } });

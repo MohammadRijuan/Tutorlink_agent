@@ -1,10 +1,5 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { spawn } from "node:child_process";
 import { prisma } from "../../lib/prisma.js";
 import { env } from "../../config/env.js";
-import { ffmpegBinary } from "../../lib/ffmpeg.js";
 import { ensureRequiredBranding, REQUIRED_HASHTAG } from "../content/safety.rules.js";
 import { chooseDesign, createBrandedAsset } from "../content/asset.service.js";
 import { publicBaseUrl } from "../share.routes.js";
@@ -13,7 +8,9 @@ import { AUTONOMOUS_ACTORS, autoPause, automationActive, getAutomationState } fr
 import { MetaApiError, sanitizeMetaErrorMessage } from "./meta.service.js";
 import { messengerBaseUrl, messengerUrlFor } from "./messenger-link.js";
 import { runPublishChecks } from "./publish-checks.js";
-import { reelFrameSvg, resolveReelFrameTexts } from "./reel-frames.js";
+import { loadBrand } from "../video/brand.js";
+import { renderReelVideo } from "../video/reel-studio.js";
+import type { ReelPlan } from "../video/reel-plan.js";
 
 class ReelRenderError extends Error {
   constructor(message: string) { super(message); this.name = "ReelRenderError"; }
@@ -27,6 +24,7 @@ type PublishableContent = {
   id: string; title: string; format: string; topic: string; caption: string; hashtags: unknown;
   script: string | null; reelScenes: unknown; assetUrl: string | null; visualStyle: string | null; status: string; platformPostId: string | null;
   creativeAngle: string | null; subtitle: string | null; designPalette: string | null; linkAssetUrl: string | null;
+  reelPlan: unknown; voiceAudio: Uint8Array | null; voiceSeconds: number | null; voicePauses: unknown;
 };
 
 const HASHTAG_LINE = /^\s*(?:#[\p{L}\p{M}\p{N}_]+\s*)+$/u;
@@ -48,57 +46,22 @@ export function buildFinalCaption(caption: string, contentId: string, options: {
   return options.includeLink === false ? body : `${body}\n\n💬 সরাসরি মেসেঞ্জারে কথা বলুন: ${messengerUrlFor(contentId)}`;
 }
 
-const SCENE_SECONDS = 3.4;
-const END_CARD_SECONDS = 4.6;
-const FADE_SECONDS = 0.35;
-
-function runFfmpeg(binary: string, args: string[]) {
-  return new Promise<void>((resolve, reject) => {
-    const child = spawn(binary, args, { stdio: ["ignore", "ignore", "pipe"] });
-    let stderr = "";
-    child.stderr.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-5000); });
-    const timeout = setTimeout(() => child.kill("SIGKILL"), 90_000);
-    child.on("error", (error) => { clearTimeout(timeout); reject(new ReelRenderError(`Reel rendering could not start: ${error.message.slice(0, 180)}. Check the FFmpeg binary is bundled with the API deployment.`)); });
-    child.on("close", (code) => {
-      clearTimeout(timeout);
-      if (code === 0) resolve();
-      else reject(new ReelRenderError(`Reel rendering failed (FFmpeg exit ${code}). ${stderr.slice(-400)}`));
-    });
-  });
-}
-
-/** Renders a real 1080x1920 H.264 + AAC MP4 (hook, scenes, contact end card) with soft fades between scenes. */
-export async function renderReel(content: Pick<PublishableContent, "title" | "script" | "reelScenes"> & { designPalette?: string | null }) {
-  const dir = await mkdtemp(join(tmpdir(), "tutorlink-reel-"));
+/**
+ * Renders the stored Reel plan with its stored voice-over (nothing is spoken twice, so publishing costs no extra voice quota).
+ * Used for publishing and for the dashboard preview.
+ */
+export async function renderStoredReel(content: { reelPlan: unknown; voiceAudio: Uint8Array | null; voiceSeconds: number | null; voicePauses: unknown; designPalette: string | null; id?: string }, options: { width?: number } = {}) {
+  const plan = content.reelPlan as ReelPlan | null;
+  if (!plan || !Array.isArray(plan.scenes) || plan.scenes.length < 3) throw new ReelRenderError("This Reel has no scene plan, so it cannot be rendered.");
+  if (!content.voiceAudio || !content.voiceSeconds) throw new ReelRenderError("This Reel has no voice-over, so it cannot be rendered (a Reel is never published silent).");
   try {
-    const texts = resolveReelFrameTexts(content);
-    const frames: string[] = [];
-    const durations: number[] = [];
-    for (let i = 0; i < texts.length; i++) {
-      const framePath = join(dir, `frame-${i}.png`);
-      await writeFile(framePath, await svgToPng(await reelFrameSvg(texts[i]!, i, texts.length, content.designPalette)));
-      frames.push(framePath);
-      durations.push(i === texts.length - 1 ? END_CARD_SECONDS : SCENE_SECONDS);
-    }
-    const total = durations.reduce((sum, value) => sum + value, 0);
-    const videoPath = join(dir, "reel.mp4");
-    const args: string[] = ["-hide_banner", "-loglevel", "error", "-y"];
-    frames.forEach((frame, i) => args.push("-loop", "1", "-framerate", "25", "-t", String(durations[i]), "-i", frame));
-    // Silent stereo AAC track: Reels uploads are safest with an audio stream present.
-    args.push("-f", "lavfi", "-t", String(total), "-i", "anullsrc=channel_layout=stereo:sample_rate=44100");
-    const filters = frames.map((_, i) => `[${i}:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=25,format=yuv420p,fade=t=in:st=0:d=${FADE_SECONDS},fade=t=out:st=${(durations[i]! - FADE_SECONDS).toFixed(2)}:d=${FADE_SECONDS}[v${i}]`).join(";");
-    const concatInputs = frames.map((_, i) => `[v${i}]`).join("");
-    args.push("-filter_complex", `${filters};${concatInputs}concat=n=${frames.length}:v=1:a=0[outv]`, "-map", "[outv]", "-map", `${frames.length}:a`,
-      "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "64k", "-movflags", "+faststart", "-t", total.toFixed(2), videoPath);
-    await runFfmpeg(ffmpegBinary(), args);
-    const bytes = await readFile(videoPath);
-    if (bytes.length < 50_000 || bytes.length > 100 * 1024 * 1024) throw new ReelRenderError("Rendered Reel MP4 is unexpectedly small or exceeds the 100 MB upload safety limit.");
-    return { bytes, seconds: total, frames: frames.length };
+    const brand = await loadBrand();
+    const pauses = Array.isArray(content.voicePauses) ? (content.voicePauses as unknown[]).filter((value): value is number => typeof value === "number") : [];
+    const result = await renderReelVideo({ plan, voice: { m4a: Buffer.from(content.voiceAudio), seconds: content.voiceSeconds, pauses }, brand, palette: content.designPalette || "OCEAN", seed: content.id ? content.id.length + content.id.charCodeAt(content.id.length - 1) : 7, width: options.width });
+    return { bytes: result.bytes, seconds: result.seconds, frames: result.scenes };
   } catch (error) {
     if (error instanceof ReelRenderError) throw error;
-    throw new ReelRenderError(`Reel rendering failed before upload: ${error instanceof Error ? error.message.slice(0, 220) : "unknown renderer error"}`);
-  } finally {
-    await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    throw new ReelRenderError(`Reel rendering failed before upload: ${error instanceof Error ? error.message.slice(0, 240) : "unknown renderer error"}`);
   }
 }
 
@@ -204,7 +167,7 @@ async function reelStatus(videoId: string): Promise<{ state: "ready" | "processi
 }
 
 async function publishReel(content: PublishableContent, caption: string) {
-  const rendered = await renderReel(content);
+  const rendered = await renderStoredReel(content);
   const started = await graphPost(`${env.META_PAGE_ID}/video_reels`, { upload_phase: "start" });
   if (!started.video_id || !started.upload_url) throw new MetaApiError("Meta did not return a Reel upload session.", 502);
   let uploaded: Response;

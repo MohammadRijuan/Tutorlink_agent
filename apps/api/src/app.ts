@@ -60,6 +60,11 @@ export function createApp() {
     const b = Buffer.from(expected);
     if (a.length !== b.length || !timingSafeEqual(a, b)) return res.status(401).json({ error: { message: "Unauthorized cron request." } });
     try {
+      // Refresh the Page statistics first (best effort; a Meta problem must never stop the campaign).
+      const lastSnapshot = await prisma.pageSnapshot.findFirst({ orderBy: { fetchedAt: "desc" }, select: { fetchedAt: true } }).catch(() => null);
+      if (env.META_PAGE_ID && env.META_PAGE_ACCESS_TOKEN && (!lastSnapshot || Date.now() - lastSnapshot.fetchedAt.getTime() > 10 * 3600_000)) {
+        await runPerformanceMonitor().catch(error => console.error(JSON.stringify({ event: "performance_refresh_failed", message: classifyFailure(error).message.slice(0, 200) })));
+      }
       const result = await generateScheduledDraft();
       const worker = await processDueContentJobs();
       return res.status(200).json({ ok: true, campaign: result, worker, publishing: env.META_PUBLISH_MODE === "live" ? "live-mode" : "dry-run" });

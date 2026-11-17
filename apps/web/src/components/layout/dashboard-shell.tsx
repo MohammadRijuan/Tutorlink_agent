@@ -77,7 +77,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
       </Link><button className="mobile-close" onClick={closeMobile} aria-label="Close navigation"><X size={20}/></button></div>
       <NavigationGroup label="Workspace" items={workspaceNavigation} onNavigate={closeMobile}/>
       <NavigationGroup label="System" items={systemNavigation} onNavigate={closeMobile}/>
-      <div className="side-bottom">AUTONOMY CORE / 1.1.0<br/>Lead quality over vanity metrics.</div>
+      <div className="side-bottom">AUTONOMY CORE / 1.2.0<br/>Lead quality over vanity metrics.</div>
     </aside>
     <main className="workspace">
       <header className="topbar">

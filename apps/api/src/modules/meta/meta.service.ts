@@ -105,7 +105,7 @@ async function listCounts(area: string, fieldSpec: string, pick: (row: Record<st
 
 export async function analyzePage() {
   const gaps: DataGap[] = [];
-  const page = await graph<{ id: string; name: string; picture?: { data?: { url?: string } } }>(env.META_PAGE_ID, { fields: "id,name,picture" });
+  const page = await graph<{ id: string; name: string; picture?: { data?: { url?: string } } }>(env.META_PAGE_ID, { fields: "id,name,picture.width(512).height(512)" });
   let followers: number | null = null;
   let likes: number | null = null;
   try {

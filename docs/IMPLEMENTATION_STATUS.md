@@ -1,12 +1,7 @@
 # Implementation status
 
-Version 1.1.0. Instruction-by-instruction table, defects found and fixed, v1.1 changes and known limits: [`REQUIREMENTS_CHECKLIST.md`](REQUIREMENTS_CHECKLIST.md). How the agent behaves day to day: [`AGENT_PLAYBOOK.md`](AGENT_PLAYBOOK.md).
+Version 1.2.0. Instruction-by-instruction table, defects fixed, version history and known limits: [`REQUIREMENTS_CHECKLIST.md`](REQUIREMENTS_CHECKLIST.md). How the agent behaves day to day: [`AGENT_PLAYBOOK.md`](AGENT_PLAYBOOK.md). Videos, voice and spelling safety: [`VIDEO_STUDIO.md`](VIDEO_STUDIO.md).
 
-**Verified in a real environment (not just type checks):**
-* 69 unit tests.
-* 52-check end-to-end run: real Express app + real PostgreSQL 16, Meta mocked at the network layer. Covers sign-in, safety switches, link-card posts with the native Send Message call-to-action, the fallback when Meta rejects the button, a Reel created on demand and uploaded as a real MP4, the public share page, posting rhythm and forecast, webhook signature/dedup/attribution, auto-pauses, stuck-publish guard, slim payloads and cacheable images.
-* The dashboard run through its Next.js proxy: sign-in, data endpoints, PNG delivery, cookie handling.
-* All 10 layouts × 3 sizes rendered with only the bundled fonts and inspected; a Reel MP4 rendered and inspected.
-* 8 migrations on PostgreSQL 16 with a schema-vs-model verifier; production API build and Vercel entry; dashboard `next build`.
+**Verified in a real environment (not just type checks):** 98 unit tests; a 41-check end-to-end run (real Express + real PostgreSQL, Meta and Google AI mocked) covering voice Reels, preview, spelling/proofreading rules, instruction interpretation, voice-failure fallback, link cards, posting rhythm, webhook attribution and the safety pauses; both Reel styles rendered and inspected; 9 migrations on PostgreSQL 16; production API build and Vercel entry; dashboard `next build`.
 
-**Must be confirmed on your deployment:** real Meta publishing (including whether Meta accepts the Send Message button on your Page), webhook delivery, Gemini/Groq keys, Vercel limits. Use Settings → Deployment self-check and the staging checklist in `PRODUCTION_DEPLOYMENT.md`.
+**Must be confirmed on your deployment:** the Bangla quality of the Gemini voices (Settings → listen to samples), real Meta publishing including the Send Message button, webhook delivery, your free keys (Gemini, Groq, Pexels), Vercel limits.

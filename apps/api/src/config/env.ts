@@ -28,6 +28,21 @@ const envSchema = z.object({
   // Public https URL of THIS API deployment (used for the Send Message link card that Facebook fetches).
   // If empty on Vercel, VERCEL_PROJECT_PRODUCTION_URL is used automatically.
   PUBLIC_API_URL: optionalString.refine(value => !value || URL.canParse(value), "PUBLIC_API_URL must be a valid URL"),
+  // ---- Voice-over and video ----
+  TTS_MODELS: z.string().default("gemini-2.5-flash-preview-tts,gemini-3.1-flash-tts-preview,gemini-2.5-flash-lite-preview-tts"),
+  TTS_VOICE: z.string().default("Kore"),
+  TTS_STYLE: z.string().default("Speak in natural, clear Bangla (Bangladesh), like a friendly and confident education adviser in a Facebook video: warm and energetic but never rushed, with short natural pauses between sentences."),
+  TTS_DAILY_LIMIT: z.coerce.number().int().min(1).max(500).default(40),
+  TTS_TIMEOUT_MS: z.coerce.number().int().min(10000).max(120000).default(70000),
+  // Optional FREE stock photos (https://www.pexels.com/api/) used as moving video backgrounds; without it, animated illustrations are used.
+  PEXELS_API_KEY: optionalString,
+  REEL_WIDTH: z.coerce.number().int().refine(value => value === 720 || value === 1080, "REEL_WIDTH must be 720 or 1080").default(720),
+  REEL_MAX_SECONDS: z.coerce.number().int().min(20).max(180).default(88),
+  // true: a Reel is only published with its voice-over; otherwise the agent posts a feed post instead of a silent video
+  REEL_REQUIRE_VOICE: z.enum(["true", "false"]).default("true"),
+  // true: nothing is published unless the AI Bangla proofreading pass ran
+  REQUIRE_PROOFREAD: z.enum(["true", "false"]).default("true"),
+
   // auto = try a link post with the native "Send Message" button first, fall back to photo + link; photo = always photo + link
   META_POST_STYLE: z.enum(["auto", "photo"]).default("auto"),
 
@@ -51,9 +66,10 @@ const envSchema = z.object({
   // Frequency guard applied to every autonomous publication.
   MAX_POSTS_PER_7_DAYS: z.coerce.number().int().min(1).max(21).default(7),
   MIN_HOURS_BETWEEN_POSTS: z.coerce.number().min(1).max(168).default(20),
-  // With NO qualified/booked lead recorded in 7 days the agent waits this long between posts (40 h = every 2nd daily run).
+  // With NO qualified/booked lead recorded in 7 days the agent waits this long between posts. The campaign runs twice a day
+  // (9:30 AM and 7:30 PM Bangladesh time), so 33 h means a post about every 1.5 days (34 h, then 38 h, alternating).
   // Set equal to MIN_HOURS_BETWEEN_POSTS to post on every run regardless of lead data.
-  NO_LEAD_WAIT_HOURS: z.coerce.number().min(1).max(168).default(40),
+  NO_LEAD_WAIT_HOURS: z.coerce.number().min(1).max(168).default(33),
 });
 
 const parsed = envSchema.safeParse(process.env);
